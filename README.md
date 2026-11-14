@@ -7,7 +7,7 @@ StrataDrill is a native Rust mining mod for Minecraft 26.3 on **Horizon Nightly 
 ## Install
 
 1. Select an instance based on **Nightly November 8, 2026** in the Horizon launcher.
-2. Download `StrataDrill-26.3-Nov8-v0.9.1.hnmod` from the release assets and copy it into that instance's `horizon-native-mods` folder. Use **Mods → Open folder** if available. Move any earlier build of this mod out of the folder before adding StrataDrill. The retained mod ID, `ore_miner`, preserves existing settings.
+2. Download `dihrill_Nov8-v0.9.1.hnmod` from the release assets and copy it into that instance's `horizon-native-mods` folder. Use **Mods → Open folder** if available. Move any earlier build of this mod out of the folder before adding StrataDrill. The retained mod ID, `ore_miner`, preserves existing settings.
 3. Choose **Mods → Native build → Build** and launch the resulting build.
 4. In Survival, put suitable tools in your hotbar, open your inventory, and click **StrataDrill**. **F8** also opens the menu and can be rebound in Controls.
 
