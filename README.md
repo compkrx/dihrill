@@ -1,8 +1,8 @@
-# StrataDrill
+# dihrill
 
 StrataDrill is a native Rust mining mod for Minecraft 26.3 on **Horizon Nightly November 8, 2026** (`fdc87ae`) for Windows x64. It follows selected ore veins, digs tunnels and vertical shafts, and checks nearby terrain before breaking blocks.
 
-[Download StrataDrill v0.9.1](https://github.com/compkrx/StrataDrill/releases/tag/v0.9.1) · [Build and test](#build-and-test)
+[Download dihrill v0.9.1](https://github.com/compkrx/StrataDrill/releases/tag/v0.9.1) · [Build and test](#build-and-test)
 
 ## Install
 
