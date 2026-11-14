@@ -1,4 +1,4 @@
-#[path = "../mixins/ore_miner/route.rs"]
+#[path = "../mixins/dihrill/route.rs"]
 mod route;
 
 #[test]

@@ -1,38 +1,38 @@
 [mod]
-id = "ore_miner"
-version = "0.9.1"
+id = "dihrill"
+version = "0.9.2"
 priority = 70
 
 [compatibility]
-horizon_revision = "fdc87aecdbd116bf1e08adcd062fcbaea8c2e2ca"
+horizon_revision = "9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0"
 
 [[module]]
 id = "miner"
 file = "crates/horizon-client/src/game/agent.rs"
-name = "ore_miner"
+name = "dihrill"
 source = "miner.rs"
 
 [[module]]
 id = "shop"
 file = "crates/horizon-client/src/game/agent.rs"
-name = "ore_miner_shop"
+name = "dihrill_shop"
 source = "shop.rs"
 
 [[module]]
 id = "route"
 file = "crates/horizon-client/src/game/agent.rs"
-name = "ore_miner_route"
+name = "dihrill_route"
 source = "route.rs"
 
 [[injection]]
-id = "ore_miner_tick"
+id = "dihrill_tick"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_client_tick_pre"
 helper = "tick.rs"
 bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]
 
 [[injection]]
-id = "ore_miner_key"
+id = "dihrill_key"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_key"
 helper = "key.rs"
@@ -43,7 +43,7 @@ bindings = [
 ]
 
 [[injection]]
-id = "ore_miner_unload"
+id = "dihrill_unload"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_client_level_unload"
 helper = "unload.rs"
@@ -52,18 +52,18 @@ bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *s
 [[module]]
 id = "menu"
 file = "crates/horizon-client/src/game/agent.rs"
-name = "ore_miner_menu"
+name = "dihrill_menu"
 source = "menu.rs"
 
 [[injection]]
-id = "ore_miner_menu_tick"
+id = "dihrill_menu_tick"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_frame"
 helper = "menu_tick.rs"
 bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]
 
 [[injection]]
-id = "ore_miner_menu_render"
+id = "dihrill_menu_render"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_screen_render_post"
 helper = "menu_render.rs"
@@ -74,7 +74,7 @@ bindings = [
 ]
 
 [[injection]]
-id = "ore_miner_menu_click"
+id = "dihrill_menu_click"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_button_pressed_pre"
 helper = "menu_click.rs"
@@ -86,7 +86,7 @@ bindings = [
 ]
 
 [[injection]]
-id = "ore_miner_menu_scroll"
+id = "dihrill_menu_scroll"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_scrolled_pre"
 helper = "menu_scroll.rs"
@@ -97,7 +97,7 @@ bindings = [
 ]
 
 [[injection]]
-id = "ore_miner_menu_char"
+id = "dihrill_menu_char"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_screen_char_typed_pre"
 helper = "menu_char.rs"
@@ -108,7 +108,7 @@ bindings = [
 ]
 
 [[injection]]
-id = "ore_miner_menu_keys"
+id = "dihrill_menu_keys"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_screen_key_pressed_pre"
 helper = "menu_keys.rs"
@@ -120,7 +120,7 @@ bindings = [
 ]
 
 [[injection]]
-id = "ore_miner_menu_register"
+id = "dihrill_menu_register"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_mods"
 helper = "menu_register.rs"
@@ -129,23 +129,23 @@ bindings = [{ name = "mods", ty = "&mut Vec<horizon_client::mod_api::NativeMod>"
 [[module]]
 id = "settings"
 file = "crates/horizon-client/src/game/agent.rs"
-name = "ore_miner_settings"
+name = "dihrill_settings"
 source = "settings.rs"
 
 [[module]]
 id = "commands"
 file = "crates/horizon-client/src/game/agent.rs"
-name = "ore_miner_commands"
+name = "dihrill_commands"
 source = "commands.rs"
 
 [[module]]
 id = "remote_state"
 file = "crates/horizon-client/src/game/remote.rs"
-name = "ore_miner_remote"
+name = "dihrill_remote"
 source = "remote_state.rs"
 
 [[injection]]
-id = "ore_miner_hash_command"
+id = "dihrill_hash_command"
 kind = "HEAD"
 target = "horizon_client::game::chat::Game<'_>::handle_chat_input"
 helper = "hash_command.rs"
@@ -156,7 +156,7 @@ bindings = [
 ]
 
 [[injection]]
-id = "ore_miner_slash_command"
+id = "dihrill_slash_command"
 hook = "command"
 hook_version = 1
 kind = "HEAD"
@@ -168,7 +168,7 @@ bindings = [
 ]
 
 [[injection]]
-id = "ore_miner_register_command"
+id = "dihrill_register_command"
 hook = "commands"
 hook_version = 1
 kind = "HEAD"
@@ -176,7 +176,7 @@ helper = "command_register.rs"
 bindings = [{ name = "commands", ty = "&mut Vec<&'static str>", value = "commands" }]
 
 [[injection]]
-id = "ore_miner_chat_completion"
+id = "dihrill_chat_completion"
 kind = "HEAD"
 target = "horizon_client::game::chat::Game<'_>::chat_key_code"
 helper = "chat_completion.rs"
@@ -187,7 +187,7 @@ bindings = [
 ]
 
 [[injection]]
-id = "ore_miner_hud"
+id = "dihrill_hud"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_hud"
 helper = "menu_hud.rs"
@@ -197,7 +197,7 @@ bindings = [
 ]
 
 [[injection]]
-id = "ore_miner_item_pickup"
+id = "dihrill_item_pickup"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_client_packet"
 helper = "item_pickup.rs"

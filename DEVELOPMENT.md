@@ -1,4 +1,4 @@
-# StrataDrill development checklist
+# Dihrill development checklist
 
 Pinned target is Minecraft 26.3 on Horizon Nightly 2026-11-08, Windows x64. The package uses the existing Ore Miner ID to retain compatible settings.
 
@@ -28,4 +28,4 @@ This update adds configurable diamond count and wait time, cave avoidance, and h
 
 ## Version 0.5.0
 
-StrataDrill tracks remaining ore item entities before leaving a vein or finishing a quota. It can wait for a pickup, try other safe approaches, and resume a pending pickup after an inventory pause. It reports drops beyond safe reach in chat. The pickup smoke test reproduces the old failure using a delayed diamond and checks both the game inventory and remaining item entities.
+Dihrill tracks remaining ore item entities before leaving a vein or finishing a quota. It can wait for a pickup, try other safe approaches, and resume a pending pickup after an inventory pause. It reports drops beyond safe reach in chat. The pickup smoke test reproduces the old failure using a delayed diamond and checks both the game inventory and remaining item entities.

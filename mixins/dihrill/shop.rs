@@ -1,7 +1,7 @@
 use super::{Game, Screen};
-use super::ore_miner;
-use super::ore_miner_settings::ShopMenu;
-use crate::game::remote::ore_miner_remote;
+use super::dihrill;
+use super::dihrill_settings::ShopMenu;
+use crate::game::remote::dihrill_remote;
 use std::cell::RefCell;
 
 pub(super) const DIAMOND: &str = "minecraft:diamond";
@@ -33,7 +33,7 @@ fn open_menu(game: &Game<'_>) -> Option<(i32, ShopMenu)> {
 }
 
 fn say(game: &mut Game<'_>, message: &str) {
-    game.native_chat(&format!("[StrataDrill] {message}"));
+    game.native_chat(&format!("[Dihrill] {message}"));
 }
 
 pub(super) fn start_setup(game: &mut Game<'_>) -> String {
@@ -43,8 +43,8 @@ pub(super) fn start_setup(game: &mut Game<'_>) -> String {
     if game.carried.is_some() || game.remote_menu_id() != 0 {
         return "Close the existing inventory and empty your cursor first.".into();
     }
-    if ore_miner::snapshot(game).running { ore_miner::pause_from_menu(game); }
-    game.native_mod_screen_close("ore_miner");
+    if dihrill::snapshot(game).running { dihrill::pause_from_menu(game); }
+    game.native_mod_screen_close("dihrill");
     SETUP.with(|s| *s.borrow_mut() = Some((address, game.ticks + RESPONSE_TICKS)));
     game.handle_chat_input("/shop");
     "Waiting for /shop.".into()
@@ -70,8 +70,8 @@ pub(in crate::game) fn setup_frame(game: &mut Game<'_>) {
     });
     match result {
         Some(Ok(menu)) => {
-            ore_miner::update_settings(game, |settings| settings.diamond_shop = Some(menu));
-            say(game, "Diamond selling is enabled on this server. Close /shop and start or resume StrataDrill.");
+            dihrill::update_settings(game, |settings| settings.diamond_shop = Some(menu));
+            say(game, "Diamond selling is enabled on this server. Close /shop and start or resume Dihrill.");
         }
         Some(Err(message)) => say(game, message),
         None => (),
@@ -186,7 +186,7 @@ impl Visit {
         while let Some(&slot) = self.slots.get(self.next) {
             self.next += 1;
             if diamonds(game, slot) == 0 { continue; }
-            if !ore_miner_remote::shop_left_click(game, window, slot) {
+            if !dihrill_remote::shop_left_click(game, window, slot) {
                 return Result::Interrupted("The shop did not accept a click on the diamond slot.");
             }
             *ready = now + CLICK_INTERVAL_TICKS;

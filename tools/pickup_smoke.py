@@ -1,4 +1,4 @@
-"""Verify that StrataDrill collects all ore and waits for a delayed drop."""
+"""Verify that Dihrill collects all ore and waits for a delayed drop."""
 import argparse
 from pathlib import Path
 import tempfile
@@ -20,7 +20,7 @@ def diamond_drops(game):
 
 def test_pickup(executable, home):
     seed_config(home, explore=False, radius=16)
-    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "StrataDrill Pickup QA", "--seed", "42"]
+    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "Dihrill Pickup QA", "--seed", "42"]
     with game_process(executable, home, flags) as game:
         ready(game)
         for line in (
@@ -37,7 +37,7 @@ def test_pickup(executable, home):
         ):
             local_command(game, line)
         game.run("wait 20", timeout=30)
-        command(game, "#mine diamond")
+        command(game, "#dihrill diamond")
         game.wait_for("all three drops collected from a connected vein",
                       lambda: diamond_count(game) == 3, timeout=30)
         assert not diamond_drops(game), diamond_drops(game)
@@ -45,7 +45,7 @@ def test_pickup(executable, home):
             assert has_block(game, pos, "air"), pos
         print("PASS: picked up all three diamonds from a connected vein.", flush=True)
 
-        command(game, "#mine stop")
+        command(game, "#dihrill stop")
         for line in (
             "clear @s minecraft:diamond",
             "tp @s 10.5 100 0.5 -90 0",
@@ -55,7 +55,7 @@ def test_pickup(executable, home):
         game.run("wait 10", timeout=30)
         local_command(game, 'summon minecraft:item 12.5 100.1 0.5 {Item:{id:"minecraft:diamond",count:1},PickupDelay:70s}')
         game.wait_for("delayed diamond entity arrives", lambda: len(diamond_drops(game)) == 1, timeout=5)
-        command(game, "#mine diamond 1")
+        command(game, "#dihrill diamond 1")
         game.wait_for("block goal after delayed pickup",
                       lambda: "Mining goal reached" in status(game), timeout=30)
         assert diamond_count(game) == 2, (diamond_count(game), diamond_drops(game))
@@ -69,7 +69,7 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     options = parser.parse_args()
     options.out.mkdir(parents=True, exist_ok=True)
-    directory = Path(tempfile.mkdtemp(prefix="stratadrill-pickup-", dir=options.out.resolve()))
+    directory = Path(tempfile.mkdtemp(prefix="dihrill-pickup-", dir=options.out.resolve()))
     print(directory, flush=True)
     test_pickup(options.client.resolve(), directory)
 

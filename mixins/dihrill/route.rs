@@ -497,6 +497,10 @@ impl Vein {
         self.positions.clone()
     }
 
+    pub fn positions(&self) -> impl Iterator<Item = Pos> + '_ {
+        self.positions.iter().copied()
+    }
+
     pub fn counts(&self) -> (usize, usize) {
         (self.positions.len() + self.mined.len(), self.mined.len())
     }
@@ -568,14 +572,14 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_prefers_a_walk_over_a_tunnel() {
+    fn dihrill_prefers_a_walk_over_a_tunnel() {
         let route = finish(Search::with_options([0, 0, 0], 8, SearchOptions::default()), hall).unwrap();
         assert_eq!(route.target, [5, 0, 0]);
         assert!(route.steps.iter().all(|step| step.dig.iter().all(Option::is_none)));
     }
 
     #[test]
-    fn ore_miner_tunnels_in_a_sealed_hall() {
+    fn dihrill_tunnels_in_a_sealed_hall() {
         let route = finish(Search::with_options([0, 0, 0], 8, SearchOptions::default()), |pos| {
             if pos[2] == 0 { hall(pos) } else { solid() }
         }).unwrap();
@@ -584,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_wades_only_across_flat_shallow_water_without_digging() {
+    fn dihrill_wades_only_across_flat_shallow_water_without_digging() {
         let water = Cell { hazard: true, shallow_water: true, ..air() };
         let mut world = |p: Pos| {
             if p == [1,0,0] { water }
@@ -601,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_checks_water_lava_and_falling_blocks() {
+    fn dihrill_checks_water_lava_and_falling_blocks() {
         let wall = [2, 1, 0];
         let fluid = Cell { known: true, hazard: true, ..Cell::default() };
         for neighbor in [[2, 2, 0], [2, 1, 1], [2, 0, 0]] {
@@ -617,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_requires_a_clear_landing_and_limits_fall_distance() {
+    fn dihrill_requires_a_clear_landing_and_limits_fall_distance() {
         let from = [0, 0, 0];
         let to = [1, -2, 0];
         let mut drop = |p: Pos| if (p[0] == 1 && p[1] == -3) || p == [0, -1, 0] { solid() } else { air() };
@@ -632,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_steps_up_only_under_clear_headroom() {
+    fn dihrill_steps_up_only_under_clear_headroom() {
         let from = [0, 0, 0];
         let to = [1, 1, 0];
         let terrain = |p| if p == [1, 0, 0] { solid() } else { air() };
@@ -642,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_continues_a_vein_when_a_closer_target_appears() {
+    fn dihrill_continues_a_vein_when_a_closer_target_appears() {
         let first = [2, 0, 0];
         let neighbor = [3, 0, 0];
         let diagonal = [4, 1, 0];
@@ -672,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_honors_priority_and_tries_another_approach() {
+    fn dihrill_honors_priority_and_tries_another_approach() {
         let nearer = [-1, 0, 0];
         let preferred = [3, 0, 0];
         let get = |p: Pos| {
@@ -691,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_replans_around_a_blocked_edge() {
+    fn dihrill_replans_around_a_blocked_edge() {
         let destination = [2, 0, 0];
         let options = SearchOptions {
             goal: Some(destination),
@@ -707,7 +711,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_explores_forward_but_can_turn_around() {
+    fn dihrill_explores_forward_but_can_turn_around() {
         let start = [0, 0, 0];
         let options = ExploreOptions { heading: [1, 0], ..ExploreOptions::default() };
         let route = finish(Search::explore(start, 8, SearchOptions::default(), options), |p| {
@@ -727,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_supports_wide_tunnels_without_clearing_unselected_ores() {
+    fn dihrill_supports_wide_tunnels_without_clearing_unselected_ores() {
         let mut get = |p: Pos| {
             if p[0] == 1 && p[1] >= 0 && p[2] == 1 {
                 Cell { dig_cost: Some(20), ..solid() }
@@ -742,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_ignores_targets_outside_the_cuboid_or_without_a_tool() {
+    fn dihrill_ignores_targets_outside_the_cuboid_or_without_a_tool() {
         let options = SearchOptions { area: Some([[0, -1, 0], [4, 2, 2]]), ..SearchOptions::default() };
         let get = |p: Pos| {
             if p == [-1, 0, 0] { ore(1) }
@@ -754,7 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_revalidates_a_path_when_hazards_change() {
+    fn dihrill_revalidates_a_path_when_hazards_change() {
         let from = [0, 0, 0];
         let to = [1, 0, 0];
         let options = SearchOptions { goal: Some(to), ..SearchOptions::default() };
@@ -775,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_caps_connected_deposits_during_refresh() {
+    fn dihrill_caps_connected_deposits_during_refresh() {
         let mut vein = Vein::new([0, 0, 0], 1, true);
         let solid_vein = |_p: Pos| ore(1);
         while !vein.advance(200, solid_vein) {}
@@ -789,7 +793,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_checks_fluid_and_support_across_the_whole_tunnel() {
+    fn dihrill_checks_fluid_and_support_across_the_whole_tunnel() {
         let from = [0, 0, 0];
         let to = [1, 0, 0];
         let solid_floor = |p: Pos| if p[1] == -1 { solid() } else { air() };
@@ -807,7 +811,7 @@ mod tests {
 
 
     #[test]
-    fn ore_miner_respects_the_target_search_radius_at_the_last_stand() {
+    fn dihrill_respects_the_target_search_radius_at_the_last_stand() {
         let get = |p: Pos| {
             if p == [9, 0, 0] { ore(1) }
             else if p[1] == -1 { solid() }

@@ -1,11 +1,11 @@
 use super::{BlockStateId, Game, ItemStack, KeyCode, MouseButton, Screen, Source};
-use super::ore_miner_route::{
+use super::dihrill_route::{
     self as route, Cell, ExploreOptions, Pos, Route, RouteKind, Search, SearchOptions,
     SearchResult, Step, Vein, up,
 };
-use super::ore_miner_settings::{Goal, Pace, Profile, Settings, ShaftDirection, Tool, may_discard};
-use crate::game::remote::ore_miner_remote;
-use super::ore_miner_shop::{self as shop, Visit};
+use super::dihrill_settings::{Goal, Pace, Profile, Settings, ShaftDirection, Tool, may_discard};
+use crate::game::remote::dihrill_remote;
+use super::dihrill_shop::{self as shop, Visit};
 use horizon_client::blocks::{Fluid, StateFacts};
 use horizon_client::menu::Input;
 use horizon_client::mobs::{Mob, Species};
@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const ID: &str = "ore_miner";
+const ID: &str = "dihrill";
 const INPUT: [KeyCode; 3] = [KeyCode::KeyW, KeyCode::Space, KeyCode::ControlLeft];
 const MAX_FAILURES: u8 = 12;
 const MAX_HISTORY: usize = 4096;
@@ -22,6 +22,7 @@ const MAX_BLOCKED: usize = 512;
 const DROP_SPAWN_TICKS: u64 = 24;
 const PICKUP_WAIT_TICKS: u64 = 40;
 const COLLECTION_TICKS: u64 = 220;
+const MAX_QUEUED_DROPS: usize = 8;
 const PICKUP_RADIUS: i32 = 12;
 const DUMP_SITES: usize = 12;
 const FAST_SEARCH_NODES: usize = 960;
@@ -346,7 +347,7 @@ impl Job {
 }
 
 fn say(game: &mut Game<'_>, message: &str) {
-    game.native_chat(&format!("[StrataDrill] {message}"));
+    game.native_chat(&format!("[Dihrill] {message}"));
 }
 
 pub(super) fn load(game: &Game<'_>) {
@@ -811,7 +812,7 @@ impl<'a, 'g> WorldRead<'a, 'g> {
 
     fn cell(&mut self, pos: Pos) -> Cell {
         let Some(state) = state_at(self.game, pos) else { return Cell::default(); };
-        if ore_miner_remote::block_pending(self.game, pos) { return Cell::default(); }
+        if dihrill_remote::block_pending(self.game, pos) { return Cell::default(); }
         let game = self.game;
         let settings = self.settings;
         let StateCell { mut cell, needs_tool } = *self.states.entry(state).or_insert_with(|| {
@@ -924,7 +925,7 @@ fn shallow_water(facts: &StateFacts) -> bool {
 }
 
 fn solid_shaft_support(game: &Game<'_>, pos: Pos) -> bool {
-    !ore_miner_remote::block_pending(game, pos) && facts_at(game, pos).is_some_and(|facts| {
+    !dihrill_remote::block_pending(game, pos) && facts_at(game, pos).is_some_and(|facts| {
         facts.full_collision && !facts.block_entity && safe_block(facts)
             && !matches!(facts.name.as_ref(), "minecraft:tnt" | "minecraft:respawn_anchor")
     })
@@ -1078,7 +1079,7 @@ fn drop_item(block: &str) -> Option<&'static str> {
 }
 
 pub(in crate::game) fn item_pickup(game: &Game<'_>, collector: i32, entity: i32, amount: i32) {
-    if amount <= 0 || ore_miner_remote::player_id(game) != Some(collector) {
+    if amount <= 0 || dihrill_remote::player_id(game) != Some(collector) {
         return;
     }
     MINER.with(|state| {
@@ -1329,8 +1330,9 @@ struct Look {
 
 fn turn_step(error: f32, velocity: f32, limit: f32) -> f32 {
     if error.abs() <= 0.22 { return error; }
-    let acceleration = (limit * 0.32).max(1.2);
-    let desired = (error * 0.48).clamp(-limit, limit);
+    let acceleration = (limit * 0.27).max(1.0);
+    let braking_speed = (2.0 * acceleration * error.abs()).sqrt();
+    let desired = error.signum() * (error.abs() * 0.46).min(braking_speed).min(limit);
     let step = velocity + (desired - velocity).clamp(-acceleration, acceleration);
     // A new target may reverse the steering direction. Stop before pushing
     // the camera through the target or drifting away from the new aim point.
@@ -1471,7 +1473,7 @@ fn shaft_landing(game: &Game<'_>, job: &mut Job, here: Pos, to: Pos, deadline: u
         return Err("You moved out of the vertical shaft. Move back to the expected landing and resume.".into());
     }
     if game.ticks >= deadline {
-        if ground(game) && here == shaft.stand && !ore_miner_remote::block_pending(game, support) {
+        if ground(game) && here == shaft.stand && !dihrill_remote::block_pending(game, support) {
             shaft.pending_landing = None;
         }
         return Err("The vertical step did not finish. Check your footing or server block permissions.".into());
@@ -1703,12 +1705,18 @@ fn follow_route(game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: P
     let now = game.ticks;
     let kind = path.kind;
     let target = path.target;
+    let next_step = path.steps.front().copied();
+    if kind == RouteKind::Target && next_step.is_some()
+        && begin_visible_mining(game, settings, job, here, Some(target))
+    {
+        return Ok(true);
+    }
     let mut world = WorldRead::new(game, settings, &job.blocked);
     if kind == RouteKind::Target && !world.cell(target).target {
         job.replan(now);
         return Ok(true);
     }
-    if let Some(step) = path.steps.front().copied() {
+    if let Some(step) = next_step {
         let (height, width) = if kind == RouteKind::Explore && matches!(settings.profile, Profile::Tunnel | Profile::Branch) {
             (settings.tunnel_height, settings.tunnel_width)
         } else { (2, 1) };
@@ -1865,6 +1873,8 @@ fn step_walk(
     });
     let forward_x = f64::from(step.to[0] - step.from[0]);
     let forward_z = f64::from(step.to[2] - step.from[2]);
+    // A short look-ahead on a straight leg keeps small lateral corrections
+    // from swinging the camera as the player approaches the next block center.
     let look_ahead = ahead as f64 * 0.8;
     let yaw = (-(dx + forward_x * look_ahead))
         .atan2(dz + forward_z * look_ahead).to_degrees() as f32;
@@ -1999,7 +2009,7 @@ fn step_mine(
     let state = state_at(game, pos);
     if state.is_some_and(|id| game.res.facts().is_air(id)) {
         release_attack(game, &mut job.attack);
-        if ore_miner_remote::block_pending(game, pos) {
+        if dihrill_remote::block_pending(game, pos) {
             job.action = Action::Confirm { pos, deadline: now + 100, target, before };
         } else {
             mined_block(game, job, pos, target, before);
@@ -2046,25 +2056,47 @@ fn step_mine(
     Ok(())
 }
 
-fn nearby_vein_target(
-    game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: Pos, mined: Pos,
-) -> Option<Pos> {
-    if !ground(game) { return None; }
-    let vein = job.vein.as_mut()?;
+fn begin_visible_mining(
+    game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: Pos, planned: Option<Pos>,
+) -> bool {
+    if job.shaft.is_some() || !ground(game) || goal_met(settings, job)
+        || job.drops.len() >= MAX_QUEUED_DROPS
+    {
+        return false;
+    }
     let mut world = WorldRead::new(game, settings, &job.blocked);
-    vein.advance(96, |pos| world.cell(pos));
+    let stand = world.cell(here);
+    if stand.hazard || stand.cave || !stand.clear {
+        return false;
+    }
+    if let Some(vein) = &mut job.vein {
+        vein.advance(96, |pos| world.cell(pos));
+    }
     let (yaw, pitch) = (game.yaw, game.pitch);
-    let candidates: Vec<_> = vein.remaining().into_iter().filter(|&pos| {
-        (0..3).all(|axis| pos[axis].abs_diff(mined[axis]) <= 1)
-            && !job.blocked_approaches.contains(&(here, pos))
-            && route::can_break(&mut |p| world.cell(p), pos)
-    }).collect();
-    candidates.into_iter().filter_map(|pos| {
+    let eye = game.eye_position().unwrap_or_else(|| game.position());
+    let reach = game.reach() + 0.87;
+    let vein_blocks = job.vein.as_ref().into_iter().flat_map(Vein::positions);
+    let next = planned.into_iter().chain(vein_blocks).filter_map(|pos| {
+        let distance = (0..3).map(|axis| (f64::from(pos[axis]) + 0.5 - eye[axis]).powi(2))
+            .sum::<f64>().sqrt();
+        if distance > reach || job.blocked_approaches.contains(&(here, pos)) {
+            return None;
+        }
+        let mut world = WorldRead::new(game, settings, &job.blocked);
+        if !world.cell(pos).target || !route::can_break(&mut |p| world.cell(p), pos) {
+            return None;
+        }
         let (next_yaw, next_pitch) = target_angles(game, pos)?;
         let sweep = angle_delta(yaw, next_yaw).hypot(next_pitch - pitch);
-        (sweep < 95.0).then_some((sweep, pos))
+        Some((f64::from(sweep) + distance * 8.0, pos))
     }).min_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)))
-        .map(|(_, pos)| pos)
+        .map(|(_, pos)| pos);
+    let Some(pos) = next else { return false; };
+    job.route = None;
+    job.phase = Phase::Mining;
+    job.action = Action::Aim { pos, target: true, started: game.ticks };
+    release_walk(game);
+    true
 }
 
 fn pickup_room(game: &Game<'_>, stack: &ItemStack) -> bool {
@@ -2465,9 +2497,9 @@ fn advance(game: &mut Game<'_>, settings: &Settings, job: &mut Job) -> Result<Ou
             step_mine(game, settings, job, here, action)?;
         }
         Action::Confirm { pos, deadline, target, before } => {
-            if ore_miner_remote::block_pending(game, pos) && now < deadline {
+            if dihrill_remote::block_pending(game, pos) && now < deadline {
                 job.action = Action::Confirm { pos, deadline, target, before };
-            } else if !ore_miner_remote::block_pending(game, pos) &&
+            } else if !dihrill_remote::block_pending(game, pos) &&
                 state_at(game, pos).is_some_and(|id| game.res.facts().is_air(id))
             {
                 mined_block(game, job, pos, target, before);
@@ -2475,12 +2507,11 @@ fn advance(game: &mut Game<'_>, settings: &Settings, job: &mut Job) -> Result<Ou
                 reject_break(job, now, pos, here, target, true)?;
             }
         }
-        Action::Collect { pos } => {
-            if matches!(settings.goal, Goal::Unlimited) && job.drops.len() < 4
-                && let Some(next) = nearby_vein_target(game, settings, job, here, pos)
-            {
-                job.phase = Phase::Mining;
-                job.action = Action::Aim { pos: next, target: true, started: now };
+        Action::Collect { .. } => {
+            // Item quotas depend on confirmed pickups. Block quotas can
+            // safely finish reachable ore faces before walking for drops.
+            if !matches!(settings.goal, Goal::Items(_, _)) {
+                begin_visible_mining(game, settings, job, here, None);
             }
         }
         Action::Ready => {
@@ -2599,7 +2630,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ore_miner_selected_drops_include_silk_and_regular_ore_results() {
+    fn dihrill_selected_drops_include_silk_and_regular_ore_results() {
         let settings = Settings {
             targets: vec!["minecraft:deepslate_diamond_ore".into(), "minecraft:stone".into()],
             ..Settings::default()
@@ -2613,7 +2644,7 @@ mod tests {
     }
 
     #[test]
-    fn ore_miner_turns_across_the_angle_wrap_in_the_shorter_direction() {
+    fn dihrill_turns_across_the_angle_wrap_in_the_shorter_direction() {
         assert_eq!(angle_delta(175.0, -175.0), 10.0);
         assert_eq!(angle_delta(-175.0, 175.0), -10.0);
     }

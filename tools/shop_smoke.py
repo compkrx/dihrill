@@ -1,4 +1,4 @@
-"""Exercise the StrataDrill shop UI and sale loop against a localhost shop fixture."""
+"""Exercise the Dihrill shop UI and sale loop against a localhost shop fixture."""
 
 import argparse
 from contextlib import contextmanager
@@ -264,7 +264,7 @@ def check(client, root):
                 assert game.run("inventory")["counts"].get("minecraft:diamond") == 17
                 game.run("key key.keyboard.escape tap")
                 game.wait_for("setup closes", lambda: game.run("screen")["screen"] == "playing")
-                game.run("chat #mine forever")
+                game.run("chat #dihrill forever")
                 game.wait_for("walking below the diamond threshold",
                               lambda: game.run("state")["player"]["position"][0] >= 1.5, timeout=15)
                 assert shop.log == ["open", "close"], shop.log
@@ -294,6 +294,6 @@ if __name__ == "__main__":
     parser.add_argument("--out", type=Path, required=True)
     options = parser.parse_args()
     options.out.mkdir(parents=True, exist_ok=True)
-    folder = Path(tempfile.mkdtemp(prefix="stratadrill-shop-", dir=options.out.resolve()))
+    folder = Path(tempfile.mkdtemp(prefix="dihrill-shop-", dir=options.out.resolve()))
     print(folder, flush=True)
     check(options.client.resolve(), folder)

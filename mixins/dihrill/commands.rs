@@ -1,10 +1,10 @@
 use super::{Game, KeyCode};
-use super::ore_miner as miner;
-use super::ore_miner_menu as menu;
-use super::ore_miner_settings::{self as settings, GROUPS, Goal, Profile};
+use super::dihrill as miner;
+use super::dihrill_menu as menu;
+use super::dihrill_settings::{self as settings, GROUPS, Goal, Profile};
 use std::cell::RefCell;
 
-const USAGE: &str = "#mine <blocks, groups, or tags> [count] | pause | resume | stop | status | settings";
+const USAGE: &str = "#dihrill <blocks, groups, or tags> [count] | pause | resume | stop | status | settings";
 const ACTIONS: &[&str] = &["help", "pause", "resume", "stop", "status", "settings", "items", "forever"];
 
 #[derive(Default)]
@@ -22,21 +22,21 @@ thread_local! {
 pub(in crate::game) fn hash_command(game: &mut Game<'_>, message: &str) -> bool {
     let line = message.trim();
     let mut words = line.splitn(2,char::is_whitespace);
-    if words.next() != Some("#mine") { return false; }
+    if words.next() != Some("#dihrill") { return false; }
     execute(game, words.next().unwrap_or(""));
     true
 }
 
 pub(in crate::game) fn slash_command(game: &mut Game<'_>, message: &str) -> bool {
     let mut words = message.trim().splitn(2,char::is_whitespace);
-    if words.next() != Some("stratadrill") { return false; }
+    if words.next() != Some("dihrill") { return false; }
     let arguments = words.next().unwrap_or("").trim();
-    execute(game, arguments.strip_prefix("mine ").unwrap_or(arguments));
+    execute(game, arguments);
     true
 }
 
 fn show(game: &mut Game<'_>, message: &str) {
-    game.native_chat(&format!("[StrataDrill] {message}"));
+    game.native_chat(&format!("[Dihrill] {message}"));
 }
 
 fn execute(game: &mut Game<'_>, arguments: &str) {
@@ -47,7 +47,7 @@ fn execute(game: &mut Game<'_>, arguments: &str) {
     miner::load(game);
     let words = arguments.split_whitespace().collect::<Vec<_>>();
     let reply = match words.as_slice() {
-        [] | ["help"] | ["mine"] => USAGE.into(),
+        [] | ["help"] => USAGE.into(),
         ["status"] => status(game),
         ["settings"] => {
             menu::request_open(game);
@@ -62,7 +62,7 @@ fn execute(game: &mut Game<'_>, arguments: &str) {
                 Err(error) => error,
             }
         }
-        ["items", ..] => "Use #mine items <item> <count> [blocks].".into(),
+        ["items", ..] => "Use #dihrill items <item> <count> [blocks].".into(),
         ["forever", targets @ ..] => start(game, targets, Goal::Unlimited),
         _ => {
             let (last, preceding) = words.split_last().unwrap();
@@ -91,7 +91,7 @@ fn start(game: &mut Game<'_>, targets: &[&str], goal: Goal) -> String {
             Err(error) => return error,
         }
     };
-    if targets.is_empty() { return "Choose target blocks in the menu or after #mine.".into(); }
+    if targets.is_empty() { return "Choose target blocks in the menu or after #dihrill.".into(); }
     miner::update_settings(game, |config| {
         config.targets = targets;
         if goal != Goal::Unlimited {
@@ -117,8 +117,8 @@ pub(in crate::game) fn tab(game: &mut Game<'_>, key: KeyCode) -> bool {
     if key != KeyCode::Tab { return false; }
     let Some((input,cursor)) = game.native_chat_input() else { return false; };
     if cursor != input.chars().count() { return false; }
-    let command = if input.starts_with("#mine ") { "#mine " }
-        else if input.starts_with("/stratadrill ") { "/stratadrill " }
+    let command = if input.starts_with("#dihrill ") { "#dihrill " }
+        else if input.starts_with("/dihrill ") { "/dihrill " }
         else { return false; };
     if !game.native_window() || game.player.is_none() || game.title.is_some() || game.remote_loading() { return false; }
 

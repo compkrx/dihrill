@@ -1,4 +1,4 @@
-"""Exercise StrataDrill in a scratch Horizon instance using the real game controls."""
+"""Exercise Dihrill in a scratch Horizon instance using the real game controls."""
 
 import argparse
 from contextlib import contextmanager
@@ -13,9 +13,9 @@ import time
 
 INSTALLED = (
     Path(os.environ["APPDATA"])
-    / "horizon-launcher/versions/nightly-2026-11-08-fdc87ae"
+    / "horizon-launcher/versions/nightly-2026-11-13-9f42064"
 )
-RESOURCES = INSTALLED / ".local/horizon-client/26.3"
+RESOURCES = Path(os.environ.get("DIHRILL_TEST_RESOURCES", INSTALLED / ".local/horizon-client/26.3"))
 
 
 class Game:
@@ -156,7 +156,7 @@ def prove(game, cmd, who, check_inventory):
     def click(x, y):
         game.run(f"click-at {x} {y}")
         # The native frame hook consumes the click on its next frame. A
-        # control-socket wait would claim the game agent and pause StrataDrill.
+        # control-socket wait would claim the game agent and pause Dihrill.
         time.sleep(0.2)
 
     game.run("options-set guiScale 1")
@@ -165,7 +165,7 @@ def prove(game, cmd, who, check_inventory):
     click(335, 224)
     game.wait_for("menu from inventory", lambda: game.run("screen")["screen"] == "mod",
                   timeout=5)
-    settings_file = game.home / "horizon-mods/.horizon-mod-data/ore_miner/settings.json"
+    settings_file = game.home / "horizon-mods/.horizon-mod-data/dihrill/settings.json"
 
     def saved():
         return json.loads(settings_file.read_text(encoding="utf-8"))

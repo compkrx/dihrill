@@ -1,9 +1,10 @@
 use super::{BlockStateId, Game};
-use super::ore_miner::{harvestable, safe_block};
+use super::dihrill::{harvestable, safe_block};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-pub(super) const ID: &str = "ore_miner";
+pub(super) const ID: &str = "dihrill";
+const PREVIOUS_ID: &str = "ore_miner";
 pub(super) const MAX_TARGETS: usize = 64;
 pub(super) const MAX_SHOP_DIAMONDS: u32 = 36 * 64;
 pub(super) const MAX_SHOP_INTERVAL: u32 = 3_600;
@@ -163,16 +164,19 @@ impl Default for Settings {
 
 impl Settings {
     pub fn load(game: &Game<'_>) -> Self {
-        let mut settings = match game.native_setting(ID, "settings.json") {
+        let existing = game.native_setting(ID, "settings.json");
+        let migrating = existing.is_none();
+        let previous = migrating.then(|| game.native_setting(PREVIOUS_ID, "settings.json")).flatten();
+        let mut settings = match existing.or(previous) {
             Some(value) => serde_json::from_str(&value).unwrap_or_else(|error| {
-                eprintln!("StrataDrill could not read settings.json: {error}");
+                eprintln!("Dihrill could not read settings.json: {error}");
                 Self::default()
             }),
             None => {
-                let targets = game.native_setting(ID, "targets").and_then(|value|
+                let targets = game.native_setting(PREVIOUS_ID, "targets").and_then(|value|
                     parse_targets(game, &value.split_whitespace().collect::<Vec<_>>()).ok()
                 );
-                let radius = game.native_setting(ID, "radius").and_then(|value| value.parse().ok());
+                let radius = game.native_setting(PREVIOUS_ID, "radius").and_then(|value| value.parse().ok());
                 Self {
                     targets: targets.unwrap_or_default(),
                     radius: radius.unwrap_or(Self::default().radius),
@@ -188,6 +192,9 @@ impl Settings {
         {
             settings.goal = Goal::Unlimited;
         }
+        if migrating {
+            settings.save(game);
+        }
         settings
     }
 
@@ -201,7 +208,7 @@ impl Settings {
             std::fs::rename(pending, directory.join("settings.json"))
         })();
         if let Err(error) = result {
-            eprintln!("StrataDrill could not save settings.json: {error}");
+            eprintln!("Dihrill could not save settings.json: {error}");
         }
     }
 
@@ -317,7 +324,7 @@ pub(super) fn parse_targets(game: &Game<'_>, tokens: &[&str]) -> Result<Vec<Stri
                 return Err(format!("Unknown block {token}"));
             }
             if !target_is_valid(game,&id) {
-                return Err(format!("StrataDrill cannot safely mine {id}"));
+                return Err(format!("Dihrill cannot safely mine {id}"));
             }
             vec![id]
         };

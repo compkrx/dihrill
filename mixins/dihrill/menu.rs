@@ -1,5 +1,5 @@
-use super::ore_miner::{self as miner, Snapshot};
-use super::ore_miner_settings::{self as config, Goal, Pace, Profile, Settings, ShaftDirection, Tool};
+use super::dihrill::{self as miner, Snapshot};
+use super::dihrill_settings::{self as config, Goal, Pace, Profile, Settings, ShaftDirection, Tool};
 use super::{Game, Screen};
 use horizon_client::{hud::HudBatch, mod_api::{NativeMod, NativeScreenView}};
 use std::cell::RefCell;
@@ -185,11 +185,11 @@ impl Paint<'_,'_,'_> {
 pub(in crate::game) fn register(mods: &mut Vec<NativeMod>) {
     mods.push(NativeMod {
         id: ID.into(),
-        title: "StrataDrill".into(),
-        description: "Choose targets and start StrataDrill from your inventory.".into(),
+        title: "Dihrill".into(),
+        description: "Choose targets and start Dihrill from your inventory.".into(),
         keys: vec![
-            ["menu".into(), "Open StrataDrill".into(), MENU_KEY.into()],
-            ["pause".into(), "Pause or resume StrataDrill".into(), PAUSE_KEY.into()],
+            ["menu".into(), "Open Dihrill".into(), MENU_KEY.into()],
+            ["pause".into(), "Pause or resume Dihrill".into(), PAUSE_KEY.into()],
         ],
     });
 }
@@ -420,7 +420,7 @@ fn inventory(p: &mut Paint<'_,'_,'_>, menu: &Menu, s: &Settings, [x,y,w,_]: Rect
 }
 
 fn shop(p: &mut Paint<'_,'_,'_>, s: &Settings, [x,y,w,_]: Rect) {
-    let server = super::ore_miner_shop::server(p.game);
+    let server = super::dihrill_shop::server(p.game);
     let label = match &s.diamond_shop {
         Some(menu) => format!("Enabled on {}",menu.address),
         None => "Automatic diamond selling is off".into(),
@@ -508,7 +508,7 @@ pub(in crate::game) fn render(game: &Game<'_>, batch: &mut HudBatch, screen: &Na
         if !owned {
             let [left,top,_,_] = screen.rect;
             let (x,y) = if left >= 91.0 && top > 15.0 { (left-87.0,top) } else { (6.0,6.0) };
-            p.button([x,y,82.0,16.0],"StrataDrill",true,true,Click::Inventory);
+            p.button([x,y,82.0,16.0],"Dihrill",true,true,Click::Inventory);
             menu.hits = p.hits;
             return;
         }
@@ -523,7 +523,7 @@ pub(in crate::game) fn render(game: &Game<'_>, batch: &mut HudBatch, screen: &Na
         p.fill([x-2.0,y-2.0,w+4.0,h+4.0],0x8308050c);
         p.fill([x,y,w,h],0xff1c1527);
         p.fill([x,y,w,2.0],0xffa780ed);
-        p.text("STRATADRILL",[x+9.0,y+10.0],w-131.0,AMBER);
+        p.text("DIHRILL",[x+9.0,y+10.0],w-131.0,AMBER);
         p.text(run.state,[x+w-118.0,y+10.0],90.0,MUTED);
         p.button([x+w-23.0,y+5.0,17.0,16.0],"x",false,true,Click::Close);
         let area = [x+9.0,y+47.0,w-18.0,h-89.0];
@@ -564,7 +564,7 @@ pub(in crate::game) fn render_hud(game: &Game<'_>, batch: &mut HudBatch) {
         if hud.refresh.is_none_or(|time| now>=time) {
             let run = miner::snapshot(game);
             hud.text = if run.running || run.paused {
-                let mut text = format!("StrataDrill  {}  /  {} mined", run.state, run.mined);
+                let mut text = format!("Dihrill  {}  /  {} mined", run.state, run.mined);
                 if let Some(seconds) = run.remaining {
                     text.push_str(&format!("  /  {} left", duration_label(seconds)));
                 }
@@ -847,7 +847,7 @@ fn apply_action(game: &mut Game<'_>, menu: &mut Menu, action: Click) {
         Click::ClearStorage => miner::update_settings(game, |settings| settings.storage = None),
         Click::AvoidCaves => miner::update_settings(game, |settings| settings.avoid_caves = !settings.avoid_caves),
         Click::AvoidMobs => miner::update_settings(game, |settings| settings.avoid_mobs = !settings.avoid_mobs),
-        Click::LearnShop => menu.notice = Some(super::ore_miner_shop::start_setup(game)),
+        Click::LearnShop => menu.notice = Some(super::dihrill_shop::start_setup(game)),
         Click::DisableShop => miner::update_settings(game, |settings| settings.diamond_shop = None),
         Click::Start => menu.notice = Some(miner::run_from_menu(game)),
         Click::StartShaft(direction) => menu.notice = Some(miner::run_shaft_from_menu(game, direction)),

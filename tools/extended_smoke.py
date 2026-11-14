@@ -1,4 +1,4 @@
-"""Run the StrataDrill command, vein, exploration, and session integration checks."""
+"""Run the Dihrill command, vein, exploration, and session integration checks."""
 
 import argparse
 import json
@@ -10,7 +10,7 @@ from smoke import CLIENT_FLAGS, INSTALLED, free_port, game_process, ready
 
 
 def config_file(game_dir):
-    return game_dir / "horizon-mods/.horizon-mod-data/ore_miner/settings.json"
+    return game_dir / "horizon-mods/.horizon-mod-data/dihrill/settings.json"
 
 
 def seed_config(game_dir, **overrides):
@@ -21,13 +21,13 @@ def seed_config(game_dir, **overrides):
 
 def command(game, text):
     reply = game.run("chat " + text)
-    messages = [line for line in reply["chat"] if "[StrataDrill]" in line]
+    messages = [line for line in reply["chat"] if "[Dihrill]" in line]
     assert messages, (text, reply)
     return messages[0]
 
 
 def status(game):
-    return command(game, "#mine status")
+    return command(game, "#dihrill status")
 
 
 def block(game, position):
@@ -69,28 +69,29 @@ def setup_vein(game):
 def local_vein_and_commands(executable, run):
     home = run / "vein"
     seed_config(home, explore=False, radius=16, diagonals=False, durability=8, avoid_caves=False)
-    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "StrataDrill Vein QA", "--seed", "42"]
+    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "Dihrill Vein QA", "--seed", "42"]
     with game_process(executable,home,flags) as game:
         ready(game)
         setup_vein(game)
-        assert "Unknown block" in command(game,"#mine no_such_ore_627")
-        assert "quantity" in command(game,"#mine stone 0").lower()
-        assert "StrataDrill cannot safely mine" in command(game,"#mine gravel")
+        assert "targets selected" in command(game, "/dihrill status")
+        assert "Unknown block" in command(game,"#dihrill no_such_ore_627")
+        assert "quantity" in command(game,"#dihrill stone 0").lower()
+        assert "Dihrill cannot safely mine" in command(game,"#dihrill gravel")
         game.run("key key.keyboard.t tap")
-        game.run("type #mine diamond_or")
+        game.run("type #dihrill diamond_or")
         game.run("key key.keyboard.tab tap")
-        assert game.run("screen")["chat_input"] == "#mine diamond_ore"
+        assert game.run("screen")["chat_input"] == "#dihrill diamond_ore"
         game.run("key key.keyboard.escape tap")
-        command(game,"#mine settings")
+        command(game,"#dihrill settings")
         game.wait_for("settings opens", lambda: game.run("screen")["screen"] == "mod", timeout=8)
         game.run("key key.keyboard.escape tap")
         game.wait_for("settings closes", lambda: game.run("screen")["screen"] == "playing", timeout=8)
-        command(game,"#mine #minecraft:diamond_ores iron_ore 3")
-        command(game,"#mine pause")
+        command(game,"#dihrill #minecraft:diamond_ores iron_ore 3")
+        command(game,"#dihrill pause")
         assert "paus" in status(game).lower(), status(game)
         time.sleep(1)
         assert has_block(game,[3,100,0],"diamond_ore")
-        command(game,"#mine resume")
+        command(game,"#dihrill resume")
         game.wait_for("vein quantity", lambda: "3 target blocks mined" in status(game),
                       timeout=50)
         for x in (3,4,5):
@@ -101,15 +102,15 @@ def local_vein_and_commands(executable, run):
         assert inventory["hotbar"][0].get("damage") == 1555, inventory["hotbar"][0]
         assert inventory["hotbar"][1].get("damage",0) >= 3, inventory["hotbar"][1]
         print("PASS: hash commands, tag expansion, Tab completion, settings, pause/resume, vein priority, durability and exact block quota",flush=True)
-        command(game,"#mine stop")
+        command(game,"#dihrill stop")
         local_command(game, "setblock 7 100 -1 minecraft:stone")
         local_command(game, "setblock 8 100 -1 minecraft:stone")
         local_command(game, "setblock 9 100 -1 minecraft:stone")
-        command(game,"#mine stone 2")
+        command(game,"#dihrill stone 2")
         game.wait_for("stone quota",lambda: "2 target blocks mined" in status(game),timeout=30)
         broken = sum(has_block(game,[x,100,-1],"air") for x in (7,8,9))
         assert broken == 2, broken
-        command(game,"#mine stop")
+        command(game,"#dihrill stop")
     with game_process(executable,home,flags) as game:
         ready(game)
         assert "1 targets selected" in status(game)
@@ -124,7 +125,7 @@ def local_exploration(executable,run):
     home = run / "tunnel"
     seed_config(home, profile="tunnel", targets=["minecraft:diamond_ore"], radius=8,
                 explore=True, explore_limit=20, turn_speed=18)
-    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "StrataDrill Tunnel QA", "--seed", "42"]
+    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "Dihrill Tunnel QA", "--seed", "42"]
     with game_process(executable,home,flags) as game:
         ready(game)
         for text in (
@@ -141,10 +142,10 @@ def local_exploration(executable,run):
         ):
             local_command(game,text)
         game.run("wait 20",timeout=30)
-        command(game,"#mine forever")
+        command(game,"#dihrill forever")
         game.wait_for("ore beyond initial scan radius", lambda: has_block(game,[13,120,0],"air"),
                       timeout=75)
-        command(game,"#mine stop")
+        command(game,"#dihrill stop")
         assert has_block(game,[4,120,0],"air")
         assert has_block(game,[16,121,0],"stone")
         assert has_block(game,[0,120,-1],"gravel")
@@ -155,7 +156,7 @@ def local_continuous_exploration(executable, run):
     home = run / "continuous"
     seed_config(home, profile="tunnel", targets=["minecraft:diamond_ore"], radius=8,
                 explore=True, explore_limit=8, continuous_explore=True, turn_speed=18)
-    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "StrataDrill Continuous QA", "--seed", "42"]
+    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "Dihrill Continuous QA", "--seed", "42"]
     with game_process(executable, home, flags) as game:
         ready(game)
         for line in (
@@ -170,12 +171,12 @@ def local_continuous_exploration(executable, run):
         ):
             local_command(game, line)
         game.run("wait 20", timeout=30)
-        command(game, "#mine forever")
+        command(game, "#dihrill forever")
         game.wait_for("ore past the configured exploration limit",
                       lambda: game.run("inventory")["counts"].get("minecraft:diamond") == 1, timeout=90)
         assert has_block(game, (20, 120, 0), "air")
         assert has_block(game, (14, 121, 0), "air")
-        command(game, "#mine stop")
+        command(game, "#dihrill stop")
         print("PASS: continuous exploration mined beyond the usual distance limit", flush=True)
 
 
@@ -183,7 +184,7 @@ def local_run_timer(executable, run):
     home = run / "timer"
     seed_config(home, profile="tunnel", targets=["minecraft:diamond_ore"], radius=8,
                 explore=True, continuous_explore=True)
-    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "StrataDrill Timer QA", "--seed", "42"]
+    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "Dihrill Timer QA", "--seed", "42"]
     with game_process(executable, home, flags) as game:
         ready(game)
         for line in (
@@ -232,7 +233,7 @@ def local_run_timer(executable, run):
         game.wait_for("timer turns off", lambda: duration_is(0))
         set_timer("31s", 31)
         game.run("key key.keyboard.escape tap")
-        command(game, "#mine forever")
+        command(game, "#dihrill forever")
         game.wait_for("timer starts", lambda: "left" in status(game), timeout=3)
         game.run("key key.keyboard.f9 tap")
         game.wait_for("hotkey pauses", lambda: "Paused" in status(game), timeout=3)
@@ -259,7 +260,7 @@ def local_cave(executable,run):
     home = run / "cave"
     seed_config(home, profile="cave", targets=["minecraft:diamond_ore"],
                 radius=12, explore=False, max_fall=1, avoid_caves=False)
-    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "StrataDrill Cave QA", "--seed", "42"]
+    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "Dihrill Cave QA", "--seed", "42"]
     with game_process(executable,home,flags) as game:
         ready(game)
         for text in (
@@ -280,7 +281,7 @@ def local_cave(executable,run):
         ):
             local_command(game,text)
         game.run("wait 20",timeout=30)
-        command(game,"#mine forever")
+        command(game,"#dihrill forever")
         game.wait_for("cave route climbs a one-block step",lambda:
                       game.run("inventory")["counts"].get("minecraft:diamond",0) >= 1,
                       timeout=45)
@@ -297,7 +298,7 @@ def local_tools(executable, run):
     for preference in ("silk", "fortune"):
         home = run / preference
         seed_config(home, tool=preference, explore=False, radius=8)
-        flags = CLIENT_FLAGS + ["--test-terrain","--world","StrataDrill Tool QA","--seed","42"]
+        flags = CLIENT_FLAGS + ["--test-terrain","--world","Dihrill Tool QA","--seed","42"]
         with game_process(executable,home,flags) as game:
             ready(game)
             for text in (
@@ -314,7 +315,7 @@ def local_tools(executable, run):
             ):
                 local_command(game,text)
             game.run("wait 20",timeout=30)
-            command(game,"#mine diamond 1")
+            command(game,"#dihrill diamond 1")
             game.wait_for("enchanted mining completes",lambda:
                           "Mining goal reached" in status(game),timeout=35)
             inv=game.run("inventory")
@@ -333,7 +334,7 @@ def local_wading(executable, run):
         home = run / ("wading-on" if enabled else "wading-off")
         seed_config(home, profile="cave", targets=["minecraft:diamond_ore"],
                     radius=12, explore=False, shallow_water=enabled)
-        flags = CLIENT_FLAGS + ["--test-terrain","--world","StrataDrill Wading QA","--seed","42"]
+        flags = CLIENT_FLAGS + ["--test-terrain","--world","Dihrill Wading QA","--seed","42"]
         with game_process(executable,home,flags) as game:
             ready(game)
             for text in (
@@ -352,7 +353,7 @@ def local_wading(executable, run):
             game.wait_for("shallow flow reaches the route", lambda:
                           game.run("block 4 170 0").get("state") == "minecraft:water[level=6]",
                           timeout=20)
-            command(game,"#mine forever")
+            command(game,"#dihrill forever")
             game.wait_for("wading run ends",lambda: "stopped" in status(game).lower(),timeout=45)
             assert has_block(game,[8,170,0],"air" if enabled else "diamond_ore")
             assert game.run("inventory")["counts"].get("minecraft:diamond",0) == int(enabled)
@@ -363,7 +364,7 @@ def local_branch(executable,run):
     home = run / "branch"
     seed_config(home, profile="branch", targets=["minecraft:diamond_ore"],
                 radius=8, explore=True, explore_limit=28, branch_spacing=6, turn_speed=18)
-    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "StrataDrill Branch QA", "--seed", "42"]
+    flags = CLIENT_FLAGS + ["--test-terrain", "--world", "Dihrill Branch QA", "--seed", "42"]
     with game_process(executable,home,flags) as game:
         ready(game)
         for text in (
@@ -381,12 +382,12 @@ def local_branch(executable,run):
         ):
             local_command(game,text)
         game.run("wait 20",timeout=30)
-        command(game,"#mine forever")
+        command(game,"#dihrill forever")
         game.wait_for("branch at the first interval",lambda:
                       has_block(game,[6,180,4],"air"),timeout=65)
         game.wait_for("returns to the main tunnel",lambda:
                       has_block(game,[10,180,0],"air"),timeout=65)
-        command(game,"#mine stop")
+        command(game,"#dihrill stop")
         print("PASS: Branch Miner dug a lateral branch and returned to extend the main tunnel",flush=True)
 
 
@@ -394,7 +395,7 @@ def local_storage(executable, run):
     home = run / "storage"
     seed_config(home, explore=False, radius=16, storage=[1,140,2], avoid_caves=False,
                 targets=["minecraft:diamond_ore"])
-    flags = CLIENT_FLAGS + ["--test-terrain","--world","StrataDrill Storage QA","--seed","42"]
+    flags = CLIENT_FLAGS + ["--test-terrain","--world","Dihrill Storage QA","--seed","42"]
     with game_process(executable,home,flags) as game:
         ready(game)
         for text in (
@@ -414,7 +415,7 @@ def local_storage(executable, run):
         for slot in range(1,27):
             local_command(game,f"item replace entity @s inventory.{slot} with minecraft:apple 1")
         game.run("wait 20",timeout=30)
-        command(game,"#mine forever")
+        command(game,"#dihrill forever")
         game.wait_for("mines after using storage",lambda: has_block(game,[6,140,0],"air"),
                       timeout=50)
         check = local_command(game, "data get block 1 140 2 Items")
@@ -429,7 +430,7 @@ def local_item_and_area(executable,run):
     home = run / "area"
     seed_config(home, profile="area", explore=False, radius=12, avoid_caves=False,
                 area=[[1,150,-1],[7,151,1]], targets=["minecraft:diamond_ore"])
-    flags = CLIENT_FLAGS + ["--test-terrain","--world","StrataDrill Area QA","--seed","42"]
+    flags = CLIENT_FLAGS + ["--test-terrain","--world","Dihrill Area QA","--seed","42"]
     with game_process(executable,home,flags) as game:
         ready(game)
         for text in (
@@ -445,7 +446,7 @@ def local_item_and_area(executable,run):
         ):
             local_command(game,text)
         game.run("wait 20",timeout=30)
-        command(game,"#mine forever")
+        command(game,"#dihrill forever")
         game.wait_for("Area Miner collects the inside block", lambda:
                       game.run("inventory")["counts"].get("minecraft:diamond",0) >= 1,
                       timeout=40)
@@ -453,7 +454,7 @@ def local_item_and_area(executable,run):
                       "stopped" in status(game).lower(), timeout=30)
         assert has_block(game,[2,150,2],"diamond_ore")
         assert has_block(game,[8,150,0],"diamond_ore")
-        command(game,"#mine items diamond 1 diamond")
+        command(game,"#dihrill items diamond 1 diamond")
         game.wait_for("Quantity Miner collects one new item",lambda:
                       "stopped" in status(game).lower(),timeout=40)
         assert game.run("inventory")["counts"].get("minecraft:diamond") == 2
@@ -480,7 +481,7 @@ def remote_disconnect(executable,run):
                       ["--test-terrain","--dedicated","--nogui","--port",str(port)],"console stop") as server:
         home = run/"disconnect-client"
         seed_config(home, explore=False, radius=16, avoid_caves=False)
-        flags = CLIENT_FLAGS + ["--server",address,"--name","StrataDrillQA"]
+        flags = CLIENT_FLAGS + ["--server",address,"--name","DihrillQA"]
         with game_process(executable,home,flags) as game:
             ready(game)
             for text in (
@@ -491,26 +492,26 @@ def remote_disconnect(executable,run):
                 "setblock 10 130 0 minecraft:diamond_ore",
                 "setworldspawn 0 130 0",
                 "gamerule spawn_mobs false",
-                "tp StrataDrillQA 0.5 130 0.5 -90 0",
-                "item replace entity StrataDrillQA hotbar.0 with minecraft:iron_pickaxe",
+                "tp DihrillQA 0.5 130 0.5 -90 0",
+                "item replace entity DihrillQA hotbar.0 with minecraft:iron_pickaxe",
             ):
                 server.run("console " + text)
             game.run("wait 20",timeout=30)
-            command(game,"#mine diamond")
+            command(game,"#dihrill diamond")
             game.run("disconnect")
-            game.run(f"connect {address} StrataDrillQA")
+            game.run(f"connect {address} DihrillQA")
             ready(game)
             game.run("wait 40",timeout=30)
             assert has_block(game,[8,130,0],"diamond_ore")
-            assert "No paused job" in command(game,"#mine resume")
+            assert "No paused job" in command(game,"#dihrill resume")
             assert has_block(game,[8,130,0],"diamond_ore")
             print("PASS: disconnect cancels the running job across reconnect",flush=True)
-            command(game,"#mine items diamond 1 diamond")
+            command(game,"#dihrill items diamond 1 diamond")
             game.wait_for("server-confirmed item goal",lambda:
                           "Mining goal reached" in status(game),timeout=55)
             assert has_block(game,[2,130,0],"diamond_ore")
             assert sum(has_block(game,[x,130,0],"air") for x in (8,10)) == 1
-            inv=server.run("console data get entity StrataDrillQA Inventory")
+            inv=server.run("console data get entity DihrillQA Inventory")
             assert "minecraft:diamond" in json.dumps(inv), inv
             assert "1 target blocks mined" in status(game)
             print("PASS: spawn protection rejected the near ore and only the accepted break and pickup counted",flush=True)
@@ -536,7 +537,7 @@ def main():
     parser.add_argument("--case", choices=("all",*checks), default="all")
     options = parser.parse_args()
     options.out.mkdir(parents=True,exist_ok=True)
-    directory = Path(tempfile.mkdtemp(prefix="stratadrill-extended-",dir=options.out.resolve()))
+    directory = Path(tempfile.mkdtemp(prefix="dihrill-extended-",dir=options.out.resolve()))
     print(directory,flush=True)
     for case in checks if options.case == "all" else (options.case,):
         checks[case](options.client.resolve(),directory)

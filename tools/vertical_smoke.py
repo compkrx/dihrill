@@ -10,7 +10,7 @@ from smoke import CLIENT_FLAGS, INSTALLED, free_port, game_process, ready
 
 def start_shaft(game, direction, length):
     game.run("key key.keyboard.f8 tap")
-    game.wait_for("StrataDrill menu opens", lambda: game.run("screen")["screen"] == "mod")
+    game.wait_for("Dihrill menu opens", lambda: game.run("screen")["screen"] == "mod")
     for x, y in ((480, 193), (478, 364), (478, 268)):
         game.run(f"click-at {x} {y}")
         time.sleep(0.25)
@@ -90,7 +90,7 @@ def check(game, send, player, hazards):
             start_shaft(game, direction, 1)
             wait_for_status("Vertical digging paused for unsafe ground")
             assert has_block(game, (x, 149 if direction == "down" else 152, 0), "deepslate")
-            game.run("chat #mine stop")
+            game.run("chat #dihrill stop")
         assert game.run("state")["player"]["health"] == 20
         print("PASS: left shaft blocks intact above lava and a drop, below gravel, and beside water.", flush=True)
 
@@ -102,14 +102,14 @@ def main():
     parser.add_argument("--case", choices=["local", "remote", "all"], default="all")
     options = parser.parse_args()
     options.out.mkdir(parents=True, exist_ok=True)
-    run = Path(tempfile.mkdtemp(prefix="stratadrill-vertical-", dir=options.out.resolve()))
+    run = Path(tempfile.mkdtemp(prefix="dihrill-vertical-", dir=options.out.resolve()))
     print(run, flush=True)
     client = options.client.resolve()
     settings = dict(targets=["minecraft:deepslate_diamond_ore"], avoid_caves=True)
     if options.case != "remote":
         home = run / "local"
         seed_config(home, **settings)
-        flags = CLIENT_FLAGS + ["--test-terrain", "--world", "StrataDrill Vertical QA", "--seed", "42"]
+        flags = CLIENT_FLAGS + ["--test-terrain", "--world", "Dihrill Vertical QA", "--seed", "42"]
         with game_process(client, home, flags) as game:
             check(game, lambda line: game.run(f"command {line}"), "@s", hazards=True)
     if options.case != "local":

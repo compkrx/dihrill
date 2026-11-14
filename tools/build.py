@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan, stage, compile, test and validate StrataDrill with the pinned Horizon tools."""
+"""Plan, stage, compile, test and validate Dihrill with the pinned Horizon tools."""
 
 import argparse
 import hashlib
@@ -36,8 +36,7 @@ def verify_source(source: Path, env: dict) -> None:
         raise SystemExit(f"Horizon export must have .horizon-revision {expected}")
     for path, expected_sha in COMPAT["source_sha256"].items():
         content = (source / path).read_bytes()
-        if checkout:
-            content = content.replace(b"\r\n", b"\n")
+        content = content.replace(b"\r\n", b"\n")
         if hashlib.sha256(content).hexdigest() != expected_sha:
             raise SystemExit(f"Pinned Horizon source checksum mismatch: {path}")
 
@@ -58,6 +57,7 @@ def main() -> None:
     parser.add_argument("--profile", choices=("fast", "dev", "release"), default="fast",
                         help="launcher performance, dev or release build")
     parser.add_argument("--no-default-features", action="store_true", help="skip game audio and controllers")
+    parser.add_argument("--offline", action="store_true", help="require cached Cargo dependencies")
     args = parser.parse_args()
 
     env = dict(os.environ)
@@ -96,7 +96,8 @@ def main() -> None:
         raise SystemExit("Horizon Mixins checkout has modified tracked files")
     mixins_target = (args.mixins_target or build_dir / "mixins-cargo").resolve()
     mixins_env = dict(env, CARGO_TARGET_DIR=str(mixins_target))
-    run(["cargo", "build", "--locked", "--offline", "--manifest-path", mixins / "Cargo.toml",
+    cargo_mode = ["--offline"] if args.offline else []
+    run(["cargo", "build", "--locked", *cargo_mode, "--manifest-path", mixins / "Cargo.toml",
          "-p", "horizon-mixins-cli"], mixins_env)
     cli = mixins_target / "debug" / "horizon-mixins.exe"
     stage = build_dir / "modded"
@@ -126,14 +127,14 @@ def main() -> None:
         return
     profile = "fast" if args.profile == "dev" else args.profile
     target = ["--lib"] if args.action == "test" else ["--bin", "horizon-client"]
-    cargo = ["cargo", args.action, "--manifest-path", stage / "Cargo.toml", "--locked", "--offline",
+    cargo = ["cargo", args.action, "--manifest-path", stage / "Cargo.toml", "--locked", *cargo_mode,
              "-p", "horizon-client", *target, "--profile", profile]
     if args.profile == "dev":
         cargo += ["--config", "profile.fast.package.horizon-client.opt-level=0"]
     if args.no_default_features:
         cargo.append("--no-default-features")
     if args.action == "test":
-        cargo += ["--", "ore_miner", "--nocapture"]
+        cargo += ["--", "dihrill", "--nocapture"]
     run(cargo, env)
     if args.action == "build":
         print(cargo_target / profile / "horizon-client.exe")

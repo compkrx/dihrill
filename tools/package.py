@@ -63,5 +63,5 @@ def package(output: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path,
-                        default=ROOT / "target" / "StrataDrill-26.3-Nov8.hnmod")
+                        default=ROOT / "target" / "Dihrill-26.3-9f42064.hnmod")
     package(parser.parse_args().output)
