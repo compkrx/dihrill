@@ -1,0 +1,207 @@
+[mod]
+id = "ore_miner"
+version = "0.9.1"
+priority = 70
+
+[compatibility]
+horizon_revision = "fdc87aecdbd116bf1e08adcd062fcbaea8c2e2ca"
+
+[[module]]
+id = "miner"
+file = "crates/horizon-client/src/game/agent.rs"
+name = "ore_miner"
+source = "miner.rs"
+
+[[module]]
+id = "shop"
+file = "crates/horizon-client/src/game/agent.rs"
+name = "ore_miner_shop"
+source = "shop.rs"
+
+[[module]]
+id = "route"
+file = "crates/horizon-client/src/game/agent.rs"
+name = "ore_miner_route"
+source = "route.rs"
+
+[[injection]]
+id = "ore_miner_tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_client_tick_pre"
+helper = "tick.rs"
+bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]
+
+[[injection]]
+id = "ore_miner_key"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_key"
+helper = "key.rs"
+bindings = [
+    { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+    { name = "key", ty = "&str", value = "key" },
+    { name = "pressed", ty = "bool", value = "pressed" },
+]
+
+[[injection]]
+id = "ore_miner_unload"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_client_level_unload"
+helper = "unload.rs"
+bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]
+
+[[module]]
+id = "menu"
+file = "crates/horizon-client/src/game/agent.rs"
+name = "ore_miner_menu"
+source = "menu.rs"
+
+[[injection]]
+id = "ore_miner_menu_tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_frame"
+helper = "menu_tick.rs"
+bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]
+
+[[injection]]
+id = "ore_miner_menu_render"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_render_post"
+helper = "menu_render.rs"
+bindings = [
+    { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+    { name = "batch", ty = "&mut horizon_client::hud::HudBatch", value = "&mut *batch" },
+    { name = "screen", ty = "&horizon_client::mod_api::NativeScreenView<'_>", value = "screen" },
+]
+
+[[injection]]
+id = "ore_miner_menu_click"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_button_pressed_pre"
+helper = "menu_click.rs"
+bindings = [
+    { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+    { name = "screen", ty = "&horizon_client::mod_api::NativeScreenView<'_>", value = "screen" },
+    { name = "button", ty = "i32", value = "button" },
+    { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+[[injection]]
+id = "ore_miner_menu_scroll"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_scrolled_pre"
+helper = "menu_scroll.rs"
+bindings = [
+    { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+    { name = "scroll", ty = "[f64; 2]", value = "scroll" },
+    { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+[[injection]]
+id = "ore_miner_menu_char"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_char_typed_pre"
+helper = "menu_char.rs"
+bindings = [
+    { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+    { name = "c", ty = "char", value = "c" },
+    { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+[[injection]]
+id = "ore_miner_menu_keys"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_key_pressed_pre"
+helper = "menu_keys.rs"
+bindings = [
+    { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+    { name = "key", ty = "&str", value = "key" },
+    { name = "repeat", ty = "bool", value = "repeat" },
+    { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+[[injection]]
+id = "ore_miner_menu_register"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_mods"
+helper = "menu_register.rs"
+bindings = [{ name = "mods", ty = "&mut Vec<horizon_client::mod_api::NativeMod>", value = "&mut *mods" }]
+
+[[module]]
+id = "settings"
+file = "crates/horizon-client/src/game/agent.rs"
+name = "ore_miner_settings"
+source = "settings.rs"
+
+[[module]]
+id = "commands"
+file = "crates/horizon-client/src/game/agent.rs"
+name = "ore_miner_commands"
+source = "commands.rs"
+
+[[module]]
+id = "remote_state"
+file = "crates/horizon-client/src/game/remote.rs"
+name = "ore_miner_remote"
+source = "remote_state.rs"
+
+[[injection]]
+id = "ore_miner_hash_command"
+kind = "HEAD"
+target = "horizon_client::game::chat::Game<'_>::handle_chat_input"
+helper = "hash_command.rs"
+cancellable = true
+bindings = [
+    { name = "game", ty = "&mut Game<'_>", value = "self" },
+    { name = "message", ty = "&str", value = "message" },
+]
+
+[[injection]]
+id = "ore_miner_slash_command"
+hook = "command"
+hook_version = 1
+kind = "HEAD"
+helper = "slash_command.rs"
+bindings = [
+    { name = "game", ty = "&mut Game<'_>", value = "self" },
+    { name = "command", ty = "&str", value = "command" },
+    { name = "ran", ty = "&mut bool", value = "ran" },
+]
+
+[[injection]]
+id = "ore_miner_register_command"
+hook = "commands"
+hook_version = 1
+kind = "HEAD"
+helper = "command_register.rs"
+bindings = [{ name = "commands", ty = "&mut Vec<&'static str>", value = "commands" }]
+
+[[injection]]
+id = "ore_miner_chat_completion"
+kind = "HEAD"
+target = "horizon_client::game::chat::Game<'_>::chat_key_code"
+helper = "chat_completion.rs"
+cancellable = true
+bindings = [
+    { name = "game", ty = "&mut Game<'_>", value = "self" },
+    { name = "key", ty = "winit::keyboard::KeyCode", value = "key" },
+]
+
+[[injection]]
+id = "ore_miner_hud"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_hud"
+helper = "menu_hud.rs"
+bindings = [
+    { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+    { name = "batch", ty = "&mut horizon_client::hud::HudBatch", value = "&mut *batch" },
+]
+
+[[injection]]
+id = "ore_miner_item_pickup"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_client_packet"
+helper = "item_pickup.rs"
+bindings = [
+    { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+    { name = "packet", ty = "&horizon_protocol::packets::play::Clientbound", value = "packet" },
+]

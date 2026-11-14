@@ -1,0 +1,21 @@
+{
+  "game": "26.3",
+  "horizon_repository": "https://github.com/horizon-rust/horizon",
+  "horizon_revision": "fdc87aecdbd116bf1e08adcd062fcbaea8c2e2ca",
+  "horizon_release": "Nightly 2026-11-08",
+  "horizon_mixins_repository": "https://github.com/horizon-rust/horizon-mixins",
+  "horizon_mixins_revision": "e59da9094f0c2fdda6c627fe9eff22dec6a906f0",
+  "mixin_schema": 6,
+  "rust_toolchain": "1.99.1",
+  "rust_target": "x86_64-pc-windows-gnu",
+  "source_sha256": {
+    "Cargo.lock": "0f4fe7de576dbec180eb501ba7687145e7b51aa04f53abb15774227d9b66e154",
+    "native-hooks.json": "a77117a9210a80a52aceb9d489b7d62274d40dc7bbcf624c289a5c3a0b014199",
+    "crates/horizon-client/src/game.rs": "419c2bdd785f2fef499ae460c41f0bfc125b19fb12a8a8c3cef54b27de4687df",
+    "crates/horizon-client/src/game/chat.rs": "b86efedde1ba2eb79b06cb7fb56c5bfb38764fa9b26753b5ef4687877ee88d23",
+    "crates/horizon-client/src/game/native_hooks.rs": "2cb9c8f04dd92484ae22788c61d658a76b34ab74bf9deab06b0e44958eecd5bd",
+    "crates/horizon-client/src/game/remote.rs": "cfd3a13f5f52df60cc6c83340e2aaf68494dd8b91243adf2a54674ad713dcd7f",
+    "crates/horizon-client/src/game/agent.rs": "1cee033aae16ef5c4d5fb32b2de4f9623cb868eaa77b91ee1ba81395625d948b"
+  },
+  "horizon_source_tag": "nightly-source/2026-11-08-fdc87ae"
+}
