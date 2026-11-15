@@ -388,8 +388,8 @@ fn avoidance(p: &mut Paint<'_,'_,'_>, s: &Settings, [x,y,w,_]: Rect) {
         (&format!("Mob avoidance  {}",on_off(s.avoid_mobs)),s.avoid_mobs,true,Click::AvoidMobs),
     ]);
     p.text("Avoid large underground openings and cave breakthroughs.",[x+2.0,y+31.0],w-4.0,TEXT);
-    p.text("Back away from nearby hostile mobs when a route is safe.",[x+2.0,y+45.0],w-4.0,TEXT);
-    p.text("After retreating or taking damage, resume manually.",[x+2.0,y+59.0],w-4.0,MUTED);
+    p.text("Detour around hostile mobs and resume automatically.",[x+2.0,y+45.0],w-4.0,TEXT);
+    p.text("Keep spare cobble in your hotbar for shelter.",[x+2.0,y+59.0],w-4.0,MUTED);
     p.stepper([x,y+80.0,w,20.0],"Mob detection radius",&format!("{} blocks",s.mob_radius),Number::MobRadius,2);
     p.button([x,y+106.0,w,17.0],"Back to Safety",false,true,Click::Page(Page::Safety));
 }

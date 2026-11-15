@@ -29,3 +29,11 @@ This update adds configurable diamond count and wait time, cave avoidance, and h
 ## Version 0.5.0
 
 Dihrill tracks remaining ore item entities before leaving a vein or finishing a quota. It can wait for a pickup, try other safe approaches, and resume a pending pickup after an inventory pause. It reports drops beyond safe reach in chat. The pickup smoke test reproduces the old failure using a delayed diamond and checks both the game inventory and remaining item entities.
+
+## Version 0.9.3
+
+The v0.9.2 loopback baseline left its player connected after pausing, allowing an active cave spider to deal damage. The updated client backed away and switched tunnels in single-player. The stock loopback server and simulated shop verified two diamond sale clicks, continued mining, and full health with the pickaxe, chestplate, and totem still equipped.
+
+The single-player pursuit fixture held off an AI-enabled cave spider with a confirmed two-block barricade, then mined the alternate tunnel without a manual resume. The player finished at full health with the totem still equipped.
+
+The single-player timer fixture verified two-block-high walls, a roof, and clear player space. The loopback timer fixture verified the same enclosure through server-side block checks with an existing roof. The planner suite passed 19 checks, and the native package passed the Horizon validator.

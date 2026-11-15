@@ -17,6 +17,51 @@ pub(super) fn up(p: Pos, dy: i32) -> Pos {
     plus(p, [0, dy, 0])
 }
 
+/// Classify a dark, open position using only local air geometry. A one-block
+/// shaft and a tunnel up to three blocks wide remain usable.
+pub(super) fn cave_opening(pos: Pos, mut air: impl FnMut(Pos) -> bool) -> bool {
+    fn body_clear(air: &mut impl FnMut(Pos) -> bool, p: Pos) -> bool {
+        air(p) && air(up(p, 1))
+    }
+    if !body_clear(&mut air, pos) {
+        return false;
+    }
+    if air(up(pos, 2))
+        && air(up(pos, 3))
+        && SIDES.iter().any(|&direction| body_clear(&mut air, up(plus(pos, direction), 1)))
+    {
+        return true;
+    }
+    for axis in [[1, 0, 0], [0, 0, 1]] {
+        let width = 1 + [-1, 1].into_iter().map(|sign| {
+            (1..=3).take_while(|distance| {
+                body_clear(&mut air, plus(pos, axis.map(|v| v * sign * distance)))
+            }).count()
+        }).sum::<usize>();
+        if width < 3 {
+            return false;
+        }
+    }
+    // Natural rooms can have a rough wall, a pillar, or clipped corners. A
+    // 4x4 section with at least 13 open columns still rules out long 3-wide
+    // passages, which can have at most 12 open columns in that section.
+    let open = std::array::from_fn::<_, 7, _>(|dx| {
+        std::array::from_fn::<_, 7, _>(|dz| {
+            body_clear(&mut air, plus(pos, [dx as i32 - 3, 0, dz as i32 - 3]))
+        })
+    });
+    for dx in 0..=3 {
+        for dz in 0..=3 {
+            let clear_columns = open[dx..dx + 4].iter()
+                .flat_map(|row| &row[dz..dz + 4]).filter(|&&clear| clear).count();
+            if clear_columns >= 13 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[derive(Clone, Copy, Default)]
 pub(super) struct Cell {
     pub known: bool,
@@ -728,6 +773,49 @@ mod tests {
             if p[1] == -1 || p[2] != 0 || p[0] > 0 { solid() } else { air() }
         }).unwrap();
         assert!(route.target[0] < -1);
+    }
+
+    #[test]
+    fn dihrill_avoids_irregular_caves_and_uses_another_vein() {
+        let start = [0, 0, 0];
+        let cave_side = [4, 0, 0];
+        let cave_wall = [3, 0, 0];
+        let safe_ore = [0, 0, -5];
+        let is_air = |[x, y, z]: Pos| {
+            (0..=1).contains(&y)
+                && ((z == 0 && (0..=2).contains(&x))
+                    || (x == 0 && (-4..=0).contains(&z))
+                    || ((4..=7).contains(&x) && (-1..=2).contains(&z)
+                        && !matches!([x, z], [4, -1] | [7, -1] | [7, 2])))
+        };
+        assert!(cave_opening(cave_side, is_air));
+        let mut world = |p| {
+            if p == cave_wall {
+                Cell { priority: 8, ..ore(1) }
+            } else if p == safe_ore {
+                ore(2)
+            } else if is_air(p) {
+                Cell { cave: cave_opening(p, is_air) || cave_opening(up(p, -1), is_air), ..air() }
+            } else {
+                solid()
+            }
+        };
+        assert!(!can_break(&mut world, cave_wall));
+        let route = finish(Search::with_options(start, 9, SearchOptions::default()), world).unwrap();
+        assert_eq!(route.target, safe_ore);
+        assert!(route.steps.iter().all(|step| step.to[0] == 0 && step.to[2] < 0));
+    }
+
+    #[test]
+    fn dihrill_keeps_narrow_tunnels_and_shafts_usable() {
+        let wide_tunnel = |[_, y, z]: Pos| (0..=2).contains(&y) && (-1..=1).contains(&z);
+        for z in -1..=1 {
+            assert!(!cave_opening([0, 0, z], wide_tunnel));
+        }
+        let shaft = |[x, _, z]: Pos| x == 0 && z == 0;
+        assert!(!cave_opening([0, 0, 0], shaft));
+        let tall_cave = |[x, y, z]: Pos| (0..=3).contains(&y) && x.abs() <= 1 && z.abs() <= 1;
+        assert!(cave_opening([0, 0, 0], tall_cave));
     }
 
     #[test]

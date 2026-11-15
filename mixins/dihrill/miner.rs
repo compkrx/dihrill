@@ -30,6 +30,10 @@ const ROUTE_BATCH_NODES: usize = 24;
 const ROUTE_NODES_PER_TICK: usize = 720;
 const ROUTE_SEARCH_SLICE: Duration = Duration::from_millis(4);
 const STALL_LIMIT: Duration = Duration::from_secs(40);
+const EVASION_CLEAR_TICKS: u64 = 40;
+const MOB_COOLDOWN_TICKS: u64 = 1_800;
+const MAX_MOB_ZONES: usize = 8;
+const ESCAPE_WALL_TICKS: u64 = 12;
 
 thread_local! {
     static MINER: RefCell<Miner> = RefCell::new(Miner::default());
@@ -43,6 +47,7 @@ struct Miner {
     ended: bool,
     message: String,
     summary: Totals,
+    emergency_exit: Option<&'static str>,
 }
 
 #[derive(Clone, Default)]
@@ -77,6 +82,8 @@ struct Job {
     previous_position: [f64; 3],
     recent_stands: VecDeque<Pos>,
     last_health: f32,
+    evasion: Option<Evasion>,
+    mob_zones: Vec<MobZone>,
     inventory: HashMap<Arc<str>, u32>,
     inventory_scratch: HashMap<Arc<str>, u32>,
     goal_items: u32,
@@ -201,7 +208,6 @@ impl Phase {
 enum Action {
     #[default]
     Ready,
-    Evade { ready: u64 },
     Walk { step: Step, started: u64, purpose: WalkPurpose },
     Aim { pos: Pos, target: bool, started: u64 },
     Mine {
@@ -219,7 +225,34 @@ enum Action {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum WalkPurpose { Route, Retreat, MobRetreat(u8) }
+enum WalkPurpose { Route, Retreat, MobRetreat }
+
+struct Evasion {
+    clear_at: u64,
+    retry_at: u64,
+    failed_destination: Option<Pos>,
+    wall: EscapeWall,
+}
+
+#[derive(Clone, Copy)]
+enum EscapeWall {
+    Ready,
+    Building { lower: Pos, direction: Pos, until: u64, clicks: u8 },
+    Attempted,
+}
+
+struct MobZone {
+    center: Pos,
+    expires: u64,
+}
+
+impl MobZone {
+    fn contains(&self, [x, y, z]: Pos) -> bool {
+        self.center[1].abs_diff(y) <= 2
+            && i64::from(self.center[0].abs_diff(x)).pow(2)
+                + i64::from(self.center[2].abs_diff(z)).pow(2) <= 16
+    }
+}
 
 pub(super) struct Snapshot {
     pub state: &'static str,
@@ -267,6 +300,8 @@ impl Job {
             previous_position: game.position(),
             recent_stands: VecDeque::from([origin]),
             last_health: game.player.as_ref().map_or(0.0, |p| p.health.health()),
+            evasion: None,
+            mob_zones: Vec::new(),
             inventory,
             inventory_scratch: HashMap::new(),
             goal_items: 0,
@@ -338,7 +373,6 @@ impl Job {
             | Action::Confirm { pos, .. } | Action::Collect { pos } => Some(pos),
             Action::ShaftJump { from, .. } => Some(up(from, 1)),
             Action::ShaftLanding { to, .. } => Some(to),
-            Action::Evade { .. } => None,
             Action::Ready => self.storage.as_ref().map(|s| s.pos)
                 .or_else(|| self.pickup.map(|pickup| pickup.stand))
                 .or_else(|| self.route.as_ref().map(|r| r.target)),
@@ -475,6 +509,7 @@ pub(super) fn run_from_menu(game: &mut Game<'_>) -> String {
                 release(game, miner.job.as_mut());
                 miner.job = Some(Job::new(game, &miner.settings));
                 miner.ended = false;
+                super::dihrill_shelter::cancel(game);
                 game.native_mod_screen_close(ID);
                 "Started mining. Open the miner menu to pause or stop."
             }
@@ -516,6 +551,7 @@ pub(super) fn run_shaft_from_menu(game: &mut Game<'_>, direction: ShaftDirection
         });
         miner.job = Some(job);
         miner.ended = false;
+        super::dihrill_shelter::cancel(game);
         game.native_mod_screen_close(ID);
         miner.message = match direction {
             ShaftDirection::Down => "Started digging down.".into(),
@@ -552,6 +588,7 @@ pub(super) fn resume_from_menu(game: &mut Game<'_>) -> String {
                     job.progress_position = game.position();
                     job.last_progress = Instant::now();
                     job.last_health = game.player.as_ref().map_or(0.0, |p| p.health.health());
+                    job.evasion = None;
                     if job.recent_stands.back() != Some(&feet(game)) {
                         job.recent_stands.clear();
                         job.recent_stands.push_back(feet(game));
@@ -565,6 +602,7 @@ pub(super) fn resume_from_menu(game: &mut Game<'_>) -> String {
                     job.blocked.clear();
                     job.storage = None;
                     job.replan(game.ticks);
+                    super::dihrill_shelter::cancel(game);
                     game.native_mod_screen_close(ID);
                     "Resumed mining."
                 }
@@ -578,6 +616,7 @@ pub(super) fn resume_from_menu(game: &mut Game<'_>) -> String {
 pub(super) fn stop_from_menu(game: &mut Game<'_>) -> String {
     MINER.with(|state| {
         let mut miner = state.borrow_mut();
+        super::dihrill_shelter::cancel(game);
         stop(game, &mut miner, "Stopped.");
         miner.message.clone()
     })
@@ -793,6 +832,7 @@ struct WorldRead<'a, 'g> {
     game: &'a Game<'g>,
     settings: &'a Settings,
     blocked: &'a HashSet<Pos>,
+    mob_zones: &'a [MobZone],
     respect_area: bool,
     states: HashMap<BlockStateId, StateCell>,
     missing_target_tool: bool,
@@ -806,8 +846,8 @@ struct StateCell {
 }
 
 impl<'a, 'g> WorldRead<'a, 'g> {
-    fn new(game: &'a Game<'g>, settings: &'a Settings, blocked: &'a HashSet<Pos>) -> Self {
-        Self { game, settings, blocked, respect_area: true, states: HashMap::new(), missing_target_tool: false, caves: HashMap::new() }
+    fn new(game: &'a Game<'g>, settings: &'a Settings, blocked: &'a HashSet<Pos>, mob_zones: &'a [MobZone]) -> Self {
+        Self { game, settings, blocked, mob_zones, respect_area: true, states: HashMap::new(), missing_target_tool: false, caves: HashMap::new() }
     }
 
     fn cell(&mut self, pos: Pos) -> Cell {
@@ -854,6 +894,8 @@ impl<'a, 'g> WorldRead<'a, 'g> {
             && [pos, up(pos, -1)].into_iter().any(|p| {
                 *self.caves.entry(p).or_insert_with(|| cave_opening(game, p))
             });
+        // Reuse the planner's no-entry/no-break boundary for observed threats.
+        cell.cave |= self.mob_zones.iter().any(|zone| zone.contains(pos));
         cell
     }
 }
@@ -865,43 +907,9 @@ fn air_at(game: &Game<'_>, pos: Pos) -> bool {
 /// Distinguish underground chambers and tall openings from narrow mining
 /// passages. Skylight makes ordinary outdoor terrain ineligible.
 fn cave_opening(game: &Game<'_>, pos: Pos) -> bool {
-    let [x,y,z] = pos;
-    if !air_at(game, pos) || !air_at(game, up(pos, 1)) || game.world.light(x, y + 1, z) >> 4 >= 12 {
-        return false;
-    }
-    // A tall column by itself can be a one-block shaft dug by the player.
-    // Require the opening to extend sideways above normal tunnel headroom.
-    if air_at(game, up(pos, 2))
-        && air_at(game, up(pos, 3))
-        && route::SIDES.iter().any(|&direction| {
-            let side = route::plus(pos, direction);
-            air_at(game, up(side, 1)) && air_at(game, up(side, 2))
-        })
-    {
-        return true;
-    }
-    // A square may start on either side of the sampled block, so the edge
-    // of an opening is caught before the player steps into its center.
-    // A four-wide chamber must have four consecutive open columns
-    // through this position along both axes.
-    for [dx, dz] in [[1, 0], [0, 1]] {
-        let width = 1 + [-1, 1].into_iter().map(|sign| {
-            (1..=3).take_while(|offset| {
-                let p = [x + dx * sign * offset, y, z + dz * sign * offset];
-                air_at(game, p) && air_at(game, up(p, 1))
-            }).count()
-        }).sum::<usize>();
-        if width < 4 { return false; }
-    }
-    let open = std::array::from_fn::<_, 7, _>(|dx| {
-        std::array::from_fn::<_, 7, _>(|dz| {
-            let p = [x + dx as i32 - 3, y, z + dz as i32 - 3];
-            air_at(game, p) && air_at(game, up(p, 1))
-        })
-    });
-    (0..=3).any(|dx| (0..=3).any(|dz| {
-        open[dx..dx + 4].iter().all(|row| row[dz..dz + 4].iter().all(|&air| air))
-    }))
+    let [x, y, z] = pos;
+    game.world.light(x, y + 1, z) >> 4 < 12
+        && route::cave_opening(pos, |p| air_at(game, p))
 }
 
 fn feet(game: &Game<'_>) -> Pos {
@@ -980,60 +988,137 @@ fn danger(game: &Game<'_>, settings: &Settings, here: Pos) -> Option<&'static st
     if player.fall_distance > f64::from(settings.max_fall) + 0.5 {
         return Some("Paused because the player is falling.");
     }
-    if player.health.health() < 5.0 || player.health.food.food < 3 {
-        return Some("Paused because health or hunger is too low.");
-    }
     None
 }
 
-fn enemy_distance(game: &Game<'_>, mob: &Mob, eye: [f64; 3], radius: f64) -> Option<f64> {
-    let target = [mob.position.x, mob.eye_y(), mob.position.z];
-    let offset: [f64; 3] = std::array::from_fn(|i| target[i] - eye[i]);
-    let distance = offset[0].hypot(offset[1]).hypot(offset[2]);
-    let swelling = mob.species() == Species::Creeper && mob.swell > 0 && distance <= 7.0;
-    (swelling || distance < 0.01 || distance <= radius
-        && game.clip_ray(eye, offset.map(|d| d / distance), distance).is_none())
+fn enemy_distance(game: &Game<'_>, settings: &Settings, mob: &Mob, eye: [f64; 3]) -> Option<f64> {
+    let [x, y, z] = eye;
+    let dx = mob.position.x - x;
+    let dz = mob.position.z - z;
+    let dy = mob.eye_y() - y;
+    let distance = dx.hypot(dy).hypot(dz);
+    let close = if mob.species() == Species::CaveSpider && settings.avoid_mobs { 3.0 } else { 2.5 };
+    let swelling = settings.avoid_mobs && mob.species() == Species::Creeper
+        && mob.swell > 0 && distance <= 7.0;
+    let near = if settings.avoid_mobs {
+        mob.species() == Species::CaveSpider && distance < close
+    } else {
+        distance < close
+    };
+    (distance < 0.01 || near || swelling || settings.avoid_mobs && distance <= f64::from(settings.mob_radius)
+        && game.clip_ray(eye, [dx / distance, dy / distance, dz / distance], distance).is_none())
         .then_some(distance)
 }
 
-fn mob_threat(game: &Game<'_>, settings: &Settings) -> bool {
-    let Some(eye) = game.eye_position() else { return false; };
-    let position = game.position();
-    game.mobs.iter().filter(|mob| mob.alive() && mob.is_enemy()).any(|mob| {
-        if !settings.avoid_mobs {
-            return (mob.position.x - position[0]).hypot(mob.position.y - position[1])
-                .hypot(mob.position.z - position[2]) < 2.5;
-        }
-        enemy_distance(game, mob, eye, f64::from(settings.mob_radius)).is_some()
-    })
+fn enemies<'a>(game: &'a Game<'_>) -> impl Iterator<Item = &'a Mob> {
+    game.mobs.iter().filter(|mob| !mob.removed && mob.alive() && mob.is_enemy())
 }
 
-fn safer_from_mobs(game: &Game<'_>, [x, y, z]: Pos, radius: u8) -> bool {
-    let Some(eye) = game.eye_position() else { return false; };
+fn nearest_threat(game: &Game<'_>, settings: &Settings) -> Option<Pos> {
+    let eye = game.eye_position()?;
+    enemies(game)
+        .filter_map(|mob| Some((enemy_distance(game, settings, mob, eye)?, mob.position)))
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, at)| [at.x.floor() as i32, at.y.floor() as i32, at.z.floor() as i32])
+}
+
+fn remember_threat(job: &mut Job, center: Pos, now: u64) {
+    if let Some(zone) = job.mob_zones.iter_mut().find(|zone| zone.contains(center)) {
+        zone.expires = now + MOB_COOLDOWN_TICKS;
+        return;
+    }
+    if job.mob_zones.len() == MAX_MOB_ZONES {
+        let oldest = job.mob_zones.iter().enumerate().min_by_key(|(_, zone)| zone.expires)
+            .map(|(index, _)| index).expect("mob zones at capacity");
+        job.mob_zones.swap_remove(oldest);
+    }
+    job.mob_zones.push(MobZone { center, expires: now + MOB_COOLDOWN_TICKS });
+}
+
+fn safer_from_mobs(game: &Game<'_>, settings: &Settings, [x, y, z]: Pos) -> Option<f64> {
+    let eye = game.eye_position()?;
     let eye_height = eye[1] - game.position()[1];
     let destination = [f64::from(x) + 0.5, f64::from(y) + eye_height, f64::from(z) + 0.5];
-    let radius = f64::from(radius);
     let mut current = f64::INFINITY;
     let mut next = f64::INFINITY;
-    for mob in game.mobs.iter().filter(|mob| mob.alive() && mob.is_enemy()) {
-        let from = enemy_distance(game, mob, eye, radius + 2.0);
-        let to = enemy_distance(game, mob, destination, radius + 2.0);
-        // Avoid walking into range of a second mob that was behind cover.
-        if from.is_none() && to.is_some_and(|distance| distance <= radius) {
-            return false;
-        }
+    for mob in enemies(game) {
+        let from = enemy_distance(game, settings, mob, eye);
+        let to = enemy_distance(game, settings, mob, destination);
+        if from.is_none() && to.is_some() { return None; }
         current = current.min(from.unwrap_or(f64::INFINITY));
         next = next.min(to.unwrap_or(f64::INFINITY));
     }
-    next.is_infinite() || next > current + 0.10
+    (next.is_infinite() || next > current + 0.10).then_some(next)
 }
 
-fn retreat_step(game: &Game<'_>, settings: &Settings, job: &mut Job, here: Pos, mob: bool) -> Option<Step> {
+fn escape_step(game: &Game<'_>, settings: &Settings, job: &Job, here: Pos, failed: Option<Pos>) -> Option<Step> {
+    if !ground(game) || game.screen != Screen::Playing { return None; }
+    // The quarantine prevents resumed mining from returning to danger. An
+    // escape may have to cross its edge to get out, but still checks terrain.
+    let mut world = WorldRead::new(game, settings, &job.blocked, &[]);
+    let mut evaluate = |to| {
+        if failed == Some(to) { return None; }
+        let (step, _) = route::transition_with_fall(
+            &mut |p| world.cell(p), here, to, false, settings.max_fall,
+        )?;
+        Some((safer_from_mobs(game, settings, to)?, step))
+    };
+    if let Some(step) = job.recent_stands.iter().rev().take(2)
+        .copied().filter(|&pos| pos != here).find_map(|pos| evaluate(pos).map(|(_, step)| step))
+    {
+        return Some(step);
+    }
+    route::SIDES.into_iter().flat_map(|side| {
+        let near = route::plus(here, side);
+        [0, 1, -1, -2, -3].into_iter().map(move |dy| up(near, dy))
+    }).filter_map(evaluate).max_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, step)| step)
+}
+
+fn escape_wall_site(
+    game: &Game<'_>, settings: &Settings, here: Pos, direction: Pos, min_gap: f64,
+) -> Option<EscapeWall> {
+    if !route::SIDES.contains(&direction) { return None; }
+    let side = [direction[2], 0, -direction[0]];
+    let spare = game.inventory[..9].iter().flatten().any(|stack| {
+        stack.count >= 2 && stack.extra.is_none() && pillar_material(&stack.item)
+    });
+    if !spare { return None; }
+    let eye = game.eye_position()?;
+    let [x, y, z] = game.position();
+    let lower = route::plus(here, direction.map(|axis| -2 * axis));
+    let mob_behind = enemies(game).any(|mob| {
+        let dx = mob.position.x - x;
+        let dz = mob.position.z - z;
+        let rear = dx * f64::from(direction[0]) + dz * f64::from(direction[2]);
+        let across = dx * f64::from(side[0]) + dz * f64::from(side[2]);
+        rear <= -min_gap && across.abs() <= 0.85 && (mob.position.y - y).abs() <= 1.0
+            && enemy_distance(game, settings, mob, eye).is_some()
+    });
+    if !mob_behind { return None; }
+    let safe_solid = |p| facts_at(game, p).is_some_and(|facts| {
+        facts.full_collision && !facts.block_entity && safe_block(facts)
+    });
+    if [lower, up(lower, 1)].into_iter().all(|p| {
+        air_at(game, p) && !dihrill_remote::block_pending(game, p)
+            && safe_solid(route::plus(p, side))
+            && safe_solid(route::plus(p, side.map(|axis| -axis)))
+    }) && safe_solid(up(lower, -1)) && safe_solid(up(lower, 2)) {
+        Some(EscapeWall::Building { lower, direction, until: game.ticks + ESCAPE_WALL_TICKS, clicks: 0 })
+    } else {
+        None
+    }
+}
+
+fn threat_too_close_to_build(game: &Game<'_>, settings: &Settings) -> bool {
+    let Some(eye) = game.eye_position() else { return true; };
+    enemies(game).any(|mob| enemy_distance(game, settings, mob, eye).is_some_and(|range| range < 2.8))
+}
+
+fn retreat_step(game: &Game<'_>, settings: &Settings, job: &mut Job, here: Pos) -> Option<Step> {
     if !ground(game) || game.screen != Screen::Playing { return None; }
     let at_last_stand = job.recent_stands.back() == Some(&here);
     let previous = job.recent_stands.iter().rev().nth(usize::from(at_last_stand)).copied()?;
-    if mob && !safer_from_mobs(game, previous, settings.mob_radius) { return None; }
-    let mut world = WorldRead::new(game, settings, &job.blocked);
+    let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
     let (step, _) = route::transition_with_fall(
         &mut |p| world.cell(p), here, previous, false, settings.max_fall,
     )?;
@@ -1211,10 +1296,16 @@ fn junk_pickup_risk(game: &Game<'_>, settings: &Settings, job: &Job) -> HashSet<
 
 fn junk_slot(game: &Game<'_>, settings: &Settings, job: &Job, start: usize) -> Option<usize> {
     let reserve_pillar = job.shaft.as_ref().is_some_and(|shaft| shaft.direction == ShaftDirection::Up);
+    let shelter_slot = game.inventory[..9].iter().enumerate().filter_map(|(index, stack)| {
+        let stack = stack.as_ref()?;
+        (stack.count > 0 && stack.extra.is_none() && stack.damage == 0 && pillar_material(&stack.item))
+            .then_some((index, stack.count))
+    }).max_by_key(|&(_, count)| count).map(|(index, _)| index);
     (start..36).find(|&index| {
         let slot = &game.inventory[index];
         slot.as_ref().is_some_and(|stack| {
             stack.count > 0 && stack.extra.is_none() && stack.damage == 0
+                && shelter_slot != Some(index)
                 && !(reserve_pillar && index < 9 && pillar_material(&stack.item))
                 && may_discard(settings, &stack.item) && !selected_drop(settings, &stack.item)
         })
@@ -1381,7 +1472,7 @@ fn step_shaft(game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: Pos
     if here != shaft.stand || !shaft_is_centered(game, shaft.stand) {
         return Err("Return to the center of the last shaft block, then resume.".into());
     }
-    let mut world = WorldRead::new(game, settings, &job.blocked);
+    let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
     world.respect_area = false;
     if !shaft_clearance(game, &mut world, here, direction) {
         return Err("Vertical digging paused for unsafe ground, an opening, falling blocks, or liquid.".into());
@@ -1416,7 +1507,7 @@ fn shaft_jump(
     game: &mut Game<'_>, settings: &Settings, job: &mut Job, from: Pos, started: u64,
 ) -> Result<(), String> {
     game.keys.release(&KeyCode::Space, Source::Agent);
-    let mut world = WorldRead::new(game, settings, &job.blocked);
+    let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
     world.respect_area = false;
     if !shaft_is_centered(game, from)
         || !shaft_clearance(game, &mut world, from, ShaftDirection::Up)
@@ -1544,7 +1635,7 @@ fn scan_next(game: &Game<'_>, settings: &Settings, job: &mut Job, here: Pos) -> 
     if job.scan.is_none() {
         let mut remaining_vein = None;
         if let Some(vein) = &mut job.vein {
-            let mut world = WorldRead::new(game, settings, &job.blocked);
+            let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
             if !vein.advance(96, |pos| world.cell(pos)) {
                 job.phase = Phase::Scanning;
                 return Ok(());
@@ -1574,7 +1665,7 @@ fn scan_next(game: &Game<'_>, settings: &Settings, job: &mut Job, here: Pos) -> 
         }
     }
     let (result, missing_tool) = {
-        let mut world = WorldRead::new(game, settings, &job.blocked);
+        let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
         let Some(scan) = &mut job.scan else { return Ok(()); };
         let started = Instant::now();
         let mut result = SearchResult::Pending;
@@ -1596,7 +1687,7 @@ fn scan_next(game: &Game<'_>, settings: &Settings, job: &mut Job, here: Pos) -> 
         SearchResult::Found(path) => {
             job.scan = None;
             if path.kind == RouteKind::Target && job.vein.is_none() {
-                let mut world = WorldRead::new(game, settings, &job.blocked);
+                let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
                 let family = world.cell(path.target).vein;
                 if family != 0 {
                     let mut vein = Vein::new(path.target, family, settings.diagonals);
@@ -1711,7 +1802,7 @@ fn follow_route(game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: P
     {
         return Ok(true);
     }
-    let mut world = WorldRead::new(game, settings, &job.blocked);
+    let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
     if kind == RouteKind::Target && !world.cell(target).target {
         job.replan(now);
         return Ok(true);
@@ -1786,7 +1877,31 @@ fn step_walk(
                 job.recent_stands.push_back(step.from);
             }
             job.recent_stands.push_back(step.to);
-            if job.recent_stands.len() > 7 { job.recent_stands.pop_front(); }
+            if job.recent_stands.len() > 32 { job.recent_stands.pop_front(); }
+        } else if purpose == WalkPurpose::MobRetreat {
+            while job.recent_stands.back().is_some_and(|&pos| pos != step.to) {
+                job.recent_stands.pop_back();
+            }
+            if job.recent_stands.is_empty() { job.recent_stands.push_back(step.to); }
+            let direction = std::array::from_fn(|axis| step.to[axis] - step.from[axis]);
+            if let Some(evasion) = &mut job.evasion
+                && matches!(evasion.wall, EscapeWall::Ready)
+                && let Some(wall) = escape_wall_site(game, settings, step.to, direction, 3.2)
+            {
+                release_walk(game);
+                evasion.wall = wall;
+                return Ok(());
+            }
+            if nearest_threat(game, settings).is_some()
+                && let Some(next) = escape_step(game, settings, job, here, None)
+            {
+                if straight_with(step, next) {
+                    return step_walk(game, settings, job, here, next, now, purpose);
+                }
+                job.action = Action::Walk { step: next, started: now, purpose };
+            }
+            release_walk(game);
+            return Ok(());
         }
         job.visit(step.to);
         if purpose == WalkPurpose::Route { job.deep_scan = false; }
@@ -1798,21 +1913,6 @@ fn step_walk(
                     job.route = None;
                 }
             }
-        }
-        if let WalkPurpose::MobRetreat(remaining) = purpose {
-            if remaining > 1 && mob_threat(game, settings)
-                && let Some(next) = retreat_step(game, settings, job, here, true)
-            {
-                let purpose = WalkPurpose::MobRetreat(remaining - 1);
-                if straight_with(step, next) {
-                    return step_walk(game, settings, job, here, next, now, purpose);
-                }
-                release_walk(game);
-                job.action = Action::Walk { step: next, started: now, purpose };
-                return Ok(());
-            }
-            release_walk(game);
-            return Err("Retreated from a hostile mob and paused. Resume when it is safe.".into());
         }
         if purpose == WalkPurpose::Retreat {
             release_walk(game);
@@ -1833,7 +1933,8 @@ fn step_walk(
         return Ok(());
     }
     let safe = {
-        let mut world = WorldRead::new(game, settings, &job.blocked);
+        let mob_zones = if purpose == WalkPurpose::MobRetreat { &[][..] } else { &job.mob_zones };
+        let mut world = WorldRead::new(game, settings, &job.blocked, mob_zones);
         route::transition_with_fall(
             &mut |pos| world.cell(pos), step.from, step.to, false, settings.max_fall,
         ).is_some()
@@ -1846,12 +1947,19 @@ fn step_walk(
     if progress.0 != step.to || distance + 0.075 < progress.1 {
         *progress = (step.to, distance, now);
     }
-    let mob_ahead = matches!(purpose, WalkPurpose::MobRetreat(_))
-        && here != step.to && !safer_from_mobs(game, step.to, settings.mob_radius);
+    let mob_ahead = purpose == WalkPurpose::MobRetreat && here != step.to
+        && safer_from_mobs(game, settings, step.to).is_none();
     if !safe || !in_corridor || mob_ahead || now.saturating_sub(progress.2) > 34
         || now.saturating_sub(started) > 105
     {
         release_walk(game);
+        if purpose == WalkPurpose::MobRetreat {
+            if let Some(evasion) = &mut job.evasion {
+                evasion.failed_destination = Some(step.to);
+                evasion.retry_at = now + 5;
+            }
+            return Ok(());
+        }
         if purpose != WalkPurpose::Route {
             return Err("Paused because the retreat route is no longer safe.".into());
         }
@@ -1863,7 +1971,7 @@ fn step_walk(
     }
     let ahead = job.route.as_ref().map_or(0, |path| {
         if purpose != WalkPurpose::Route { return 0; }
-        let mut world = WorldRead::new(game, settings, &job.blocked);
+        let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
         path.steps.iter().skip(1).take(2).take_while(|next| {
             straight_with(step, **next)
                 && route::transition_with_fall(
@@ -1883,7 +1991,12 @@ fn step_walk(
         std::cmp::Ordering::Equal => 4.0,
         std::cmp::Ordering::Greater => -3.0,
     };
-    turn(game, &mut job.look, yaw, pitch, settings.turn_speed);
+    let turn_speed = if purpose == WalkPurpose::MobRetreat {
+        settings.turn_speed.max(34)
+    } else {
+        settings.turn_speed
+    };
+    turn(game, &mut job.look, yaw, pitch, turn_speed);
     let yaw_tolerance = if settings.pace == Pace::Calm || ahead == 0 { 9.0 } else { 16.0 };
     let aligned = distance > 0.23 && angle_delta(game.yaw, yaw).abs() <= yaw_tolerance;
     if aligned {
@@ -1897,7 +2010,9 @@ fn step_walk(
     else { game.keys.release(&KeyCode::Space, Source::Agent); }
     let well_fed = game.player.as_ref().is_some_and(|player| player.health.food.food >= 10);
     let dry = [here,step.to].into_iter().all(|p| facts_at(game,p).is_some_and(|f| f.fluid == Fluid::None));
-    if settings.sprint && settings.pace == Pace::Normal && aligned && well_fed && ahead == 2 && dry {
+    let sprint = purpose == WalkPurpose::MobRetreat
+        || (settings.sprint && settings.pace == Pace::Normal && ahead == 2);
+    if sprint && aligned && well_fed && dry {
         game.keys.press(KeyCode::ControlLeft, Source::Agent);
     } else {
         game.keys.release(&KeyCode::ControlLeft, Source::Agent);
@@ -1918,7 +2033,7 @@ fn step_aim(
     if facts_at(game, here).is_none_or(|f| f.fluid != Fluid::None) {
         return reject_break(job, now, pos, here, target, false);
     }
-    let mut world = WorldRead::new(game, settings, &job.blocked);
+    let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
     if let Some(shaft) = &job.shaft {
         world.respect_area = false;
         if here != shaft.stand || !shaft_is_centered(game, here)
@@ -2031,7 +2146,7 @@ fn step_mine(
         job.replan(now);
         return Ok(());
     }
-    let mut world = WorldRead::new(game, settings, &job.blocked);
+    let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
     if let Some(shaft) = &job.shaft {
         world.respect_area = false;
         if here != shaft.stand || !shaft_is_centered(game, here)
@@ -2064,7 +2179,7 @@ fn begin_visible_mining(
     {
         return false;
     }
-    let mut world = WorldRead::new(game, settings, &job.blocked);
+    let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
     let stand = world.cell(here);
     if stand.hazard || stand.cave || !stand.clear {
         return false;
@@ -2082,7 +2197,7 @@ fn begin_visible_mining(
         if distance > reach || job.blocked_approaches.contains(&(here, pos)) {
             return None;
         }
-        let mut world = WorldRead::new(game, settings, &job.blocked);
+        let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
         if !world.cell(pos).target || !route::can_break(&mut |p| world.cell(p), pos) {
             return None;
         }
@@ -2185,7 +2300,7 @@ fn collect_drops(game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: 
             return Ok(());
         }
         if let Some(scan) = &mut job.scan {
-            let mut world = WorldRead::new(game, settings, &job.blocked);
+            let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
             match scan.advance(110, |pos| world.cell(pos)) {
                 SearchResult::Pending => (),
                 SearchResult::Found(path) => {
@@ -2207,7 +2322,7 @@ fn collect_drops(game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: 
         return Ok(());
     }
     let landing = [at[0].floor() as i32, (at[1] + 0.05).floor() as i32, at[2].floor() as i32];
-    let mut world = WorldRead::new(game, settings, &job.blocked);
+    let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
     let mut best = None;
     for dx in -1..=1 {
         for dz in -1..=1 {
@@ -2338,7 +2453,7 @@ fn advance_storage(
                 job.scan = Some(Search::with_options(here, settings.radius, options));
             }
             if let Some(scan) = &mut job.scan {
-                let mut world = WorldRead::new(game, settings, &job.blocked);
+                let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
                 match scan.advance(210, |p| world.cell(p)) {
                     SearchResult::Pending => (),
                     SearchResult::Found(path) if path.steps.is_empty() => {
@@ -2403,45 +2518,115 @@ fn advance_storage(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Outcome { Active, Complete(&'static str) }
 
-fn advance(game: &mut Game<'_>, settings: &Settings, job: &mut Job) -> Result<Outcome, String> {
+fn evade(game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: Pos, hurt: bool) -> bool {
+    let now = game.ticks;
+    job.mob_zones.retain(|zone| now < zone.expires);
+    let threat = nearest_threat(game, settings);
+    if let Some(pos) = threat { remember_threat(job, pos, now); }
+    let fire = game.player.as_ref().is_some_and(|player| player.fire_ticks > 0);
+    let unsafe_now = threat.is_some() || hurt || fire;
+    if unsafe_now && job.evasion.is_none() {
+        super::dihrill_shelter::cancel(game);
+        release(game, Some(job));
+        if let Some(visit) = job.shop.take() { visit.cancel_for_avoidance(game); }
+        close_storage(game, job.storage.as_ref());
+        job.storage = None;
+        job.vein = None;
+        job.replan(now);
+        job.evasion = Some(Evasion {
+            clear_at: now + EVASION_CLEAR_TICKS,
+            retry_at: now + 2,
+            failed_destination: None,
+            wall: EscapeWall::Ready,
+        });
+        say(game, "Leaving danger. Mining will resume from safety.");
+    }
+    let Some(evasion) = &mut job.evasion else { return false; };
+    if unsafe_now { evasion.clear_at = now + EVASION_CLEAR_TICKS; }
+    job.phase = Phase::Recovering;
+    job.last_progress = Instant::now();
+    if let EscapeWall::Building { lower, direction, until, clicks } = evasion.wall {
+        use super::dihrill_shelter::{Seal, escape_wall_step};
+        let cells = [lower, up(lower, 1)];
+        let pending = cells.into_iter().any(|pos| dihrill_remote::block_pending(game, pos));
+        let confirmed = !pending && cells.into_iter().all(|pos| facts_at(game, pos)
+            .is_some_and(|facts| pillar_material(&facts.name)));
+        let result = if confirmed {
+            Seal::Finished
+        } else if hurt || now >= until || threat_too_close_to_build(game, settings) {
+            Seal::Failed
+        } else if pending {
+            Seal::Waiting
+        } else if clicks >= 2 {
+            Seal::Failed
+        } else {
+            escape_wall_step(game, lower, direction)
+        };
+        match result {
+            Seal::Started => {
+                evasion.wall = EscapeWall::Building { lower, direction, until, clicks: clicks + 1 };
+                return true;
+            }
+            Seal::Waiting => return true,
+            Seal::Finished => {
+                job.blocked.extend([lower, up(lower, 1)]);
+                say(game, "Barricaded the tunnel behind you.");
+            }
+            Seal::Failed => (),
+        }
+        evasion.wall = EscapeWall::Attempted;
+    }
+    if let Action::Walk { step, started, purpose: WalkPurpose::MobRetreat } = job.action {
+        job.action = Action::Ready;
+        let _ = step_walk(game, settings, job, here, step, started, WalkPurpose::MobRetreat);
+        return true;
+    }
+    if !unsafe_now && now >= evasion.clear_at {
+        job.evasion = None;
+        job.replan(now);
+        say(game, "Clear of danger. Looking for a safer mining route.");
+        return true;
+    }
+    if unsafe_now && now >= evasion.retry_at {
+        let failed = evasion.failed_destination.take();
+        if let Some(step) = escape_step(game, settings, job, here, failed) {
+            let direction = std::array::from_fn(|axis| step.to[axis] - step.from[axis]);
+            let evasion = job.evasion.as_mut().expect("active evasion");
+            if matches!(evasion.wall, EscapeWall::Ready)
+                && let Some(wall) = escape_wall_site(game, settings, here, direction, 4.2)
+            {
+                evasion.wall = wall;
+                return true;
+            }
+            job.walk_progress = None;
+            job.action = Action::Walk { step, started: now, purpose: WalkPurpose::MobRetreat };
+        } else {
+            job.evasion.as_mut().expect("active evasion").retry_at = now + 5;
+        }
+    }
+    true
+}
+
+fn advance(game: &mut Game<'_>, settings: &Settings, job: &mut Job, hurt: bool) -> Result<Outcome, String> {
     let here = feet(game);
     let now = game.ticks;
+    if evade(game, settings, job, here, hurt) { return Ok(Outcome::Active); }
+    if game.player.as_ref().is_some_and(|player| {
+        player.health.health() < 5.0 || player.health.food.food < 3
+    }) {
+        return Ok(Outcome::Complete("Stopped because health or hunger is too low."));
+    }
     if let Some(reason) = danger(game, settings, here) {
-        if matches!(job.action, Action::Walk { purpose: WalkPurpose::MobRetreat(_), .. }) {
-            return Err(reason.into());
-        }
         let retreating = matches!(job.action, Action::Walk { purpose: WalkPurpose::Retreat, .. });
         if !retreating {
             if job.shop.is_some() { return Err(reason.into()); }
             release(game, Some(job));
-            if let Some(step) = retreat_step(game, settings, job, here, false) {
+            if let Some(step) = retreat_step(game, settings, job, here) {
                 job.phase = Phase::Recovering;
                 job.action = Action::Walk { step, started: now, purpose: WalkPurpose::Retreat };
                 return Ok(Outcome::Active);
             }
             return Err(reason.into());
-        }
-    }
-    let health = game.player.as_ref().map_or(0.0, |player| player.health.health());
-    let hurt = health < job.last_health;
-    job.last_health = health;
-    if !matches!(job.action, Action::Evade { .. } | Action::Walk { purpose: WalkPurpose::MobRetreat(_), .. }) {
-        if mob_threat(game, settings) {
-            release(game, Some(job));
-            close_shop(game, job);
-            close_storage(game, job.storage.as_ref());
-            job.storage = None;
-            if settings.avoid_mobs && game.screen == Screen::Playing {
-                job.phase = Phase::Recovering;
-                // Let forward momentum settle so the first retreat step starts
-                // from the cell the player actually stopped in.
-                job.action = Action::Evade { ready: now + 4 };
-                return Ok(Outcome::Active);
-            }
-            return Err("Paused because a hostile mob is nearby. Take control and move to safety.".into());
-        }
-        if settings.avoid_mobs && hurt {
-            return Err("Paused because you took damage. Resume when it is safe.".into());
         }
     }
     observe(game, settings, job);
@@ -2472,15 +2657,6 @@ fn advance(game: &mut Game<'_>, settings: &Settings, job: &mut Job) -> Result<Ou
         return Ok(Outcome::Active);
     }
     match std::mem::take(&mut job.action) {
-        Action::Evade { ready } => {
-            if now < ready {
-                job.action = Action::Evade { ready };
-            } else if let Some(step) = retreat_step(game, settings, job, here, true) {
-                job.action = Action::Walk { step, started: now, purpose: WalkPurpose::MobRetreat(5) };
-            } else {
-                return Err("Paused because a hostile mob is nearby. Take control and move to safety.".into());
-            }
-        }
         Action::Walk { step, started, purpose } => {
             step_walk(game, settings, job, here, step, started, purpose)?;
         }
@@ -2535,6 +2711,11 @@ fn advance(game: &mut Game<'_>, settings: &Settings, job: &mut Job) -> Result<Ou
             }
         }
     }
+    if !job.mob_zones.is_empty() && job.halt.is_some_and(|reason| reason.starts_with("No ")) {
+        job.replan(now);
+        job.retry_at = now + 40;
+        job.last_progress = Instant::now();
+    }
     Ok(job.halt.map_or(Outcome::Active, Outcome::Complete))
 }
 
@@ -2558,6 +2739,17 @@ pub(in crate::game) fn tick(game: &mut Game<'_>) {
             || game.player.as_ref().is_none_or(|player| player.health.health() <= 0.0);
         if unavailable {
             stop(game, &mut miner, "Stopped because the world or player state changed.");
+            return;
+        }
+        let job = miner.job.as_mut().expect("active miner");
+        let player = game.player.as_ref().expect("surviving player");
+        let health = player.health.health();
+        let hurt = health < job.last_health || player.health.hurt_animation_time > 0;
+        job.last_health = health;
+        if health <= 6.0 && (hurt || player.fire_ticks > 0) {
+            let reason = "Critical health while taking damage.";
+            stop(game, &mut miner, reason);
+            miner.emergency_exit = Some(reason);
             return;
         }
         if miner.job.as_ref().is_some_and(|job| job.paused) {
@@ -2605,24 +2797,42 @@ pub(in crate::game) fn tick(game: &mut Game<'_>) {
         }
         let outcome = if job.run_remaining == Some(Duration::ZERO) {
             Ok(Outcome::Complete("Run timer finished."))
-        } else if matches!(job.action, Action::Ready) && now.duration_since(job.last_progress) >= STALL_LIMIT {
+        } else if job.evasion.is_none() && matches!(job.action, Action::Ready)
+            && now.duration_since(job.last_progress) >= STALL_LIMIT
+        {
             let state = job.phase.label();
             Err(format!("Paused after 40 seconds without progress ({state})."))
         } else {
-            advance(game, settings, job)
+            advance(game, settings, job, hurt)
         };
         match outcome {
             Ok(Outcome::Active) => (),
             Ok(Outcome::Complete(reason)) => {
                 stop(game, &mut miner, reason);
                 say(game, &miner.message);
+                super::dihrill_shelter::begin(game);
             }
             Err(reason) => {
                 pause(game, &mut miner, &reason);
                 say(game, &reason);
+                super::dihrill_shelter::begin(game);
             }
         }
     });
+}
+
+pub(in crate::game) fn finish_emergency_exit(game: &mut Game<'_>) -> bool {
+    let reason = MINER.with(|state| state.borrow_mut().emergency_exit.take());
+    let Some(reason) = reason else { return false; };
+    if game.title.is_some() || game.player.is_none() { return false; }
+    // Leaving invokes the level-unload hook, which also accesses MINER.
+    // Run it after the tick and after releasing the RefCell borrow.
+    let [x, y, z] = feet(game);
+    say(game, &format!("Safety exit at {x}, {y}, {z}. {reason}"));
+    if let Err(error) = game.close_world() {
+        say(game, &format!("Safety exit failed: {error}. Leave the world manually."));
+    }
+    true
 }
 
 #[cfg(test)]

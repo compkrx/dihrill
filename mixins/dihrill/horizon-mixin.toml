@@ -1,6 +1,6 @@
 [mod]
 id = "dihrill"
-version = "0.9.2"
+version = "0.9.3"
 priority = 70
 
 [compatibility]
@@ -17,6 +17,12 @@ id = "shop"
 file = "crates/horizon-client/src/game/agent.rs"
 name = "dihrill_shop"
 source = "shop.rs"
+
+[[module]]
+id = "shelter"
+file = "crates/horizon-client/src/game/agent.rs"
+name = "dihrill_shelter"
+source = "shelter.rs"
 
 [[module]]
 id = "route"

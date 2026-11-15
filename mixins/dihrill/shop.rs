@@ -11,6 +11,7 @@ const RESPONSE_TICKS: u64 = 70;
 // touching any slots. Automatic visits only act in this exact kind of window.
 thread_local! {
     static SETUP: RefCell<Option<(String, u64)>> = const { RefCell::new(None) };
+    static ABANDONED_OPEN: RefCell<Option<(ShopMenu, u64)>> = const { RefCell::new(None) };
 }
 
 pub(super) fn server<'a>(game: &'a Game<'_>) -> Option<&'a str> {
@@ -44,6 +45,7 @@ pub(super) fn start_setup(game: &mut Game<'_>) -> String {
         return "Close the existing inventory and empty your cursor first.".into();
     }
     if dihrill::snapshot(game).running { dihrill::pause_from_menu(game); }
+    clear_abandoned();
     game.native_mod_screen_close("dihrill");
     SETUP.with(|s| *s.borrow_mut() = Some((address, game.ticks + RESPONSE_TICKS)));
     game.handle_chat_input("/shop");
@@ -51,6 +53,7 @@ pub(super) fn start_setup(game: &mut Game<'_>) -> String {
 }
 
 pub(in crate::game) fn setup_frame(game: &mut Game<'_>) {
+    finish_abandoned_open(game);
     let result = SETUP.with(|s| {
         let mut setup = s.borrow_mut();
         let (address, deadline) = setup.as_ref()?;
@@ -76,6 +79,35 @@ pub(in crate::game) fn setup_frame(game: &mut Game<'_>) {
         Some(Err(message)) => say(game, message),
         None => (),
     }
+}
+
+pub(in crate::game) fn clear_abandoned() {
+    ABANDONED_OPEN.with(|pending| { pending.borrow_mut().take(); });
+}
+
+fn close_window(game: &mut Game<'_>) {
+    game.close_container();
+    game.screen = Screen::Playing;
+    game.capture(true);
+}
+
+fn finish_abandoned_open(game: &mut Game<'_>) {
+    let close = ABANDONED_OPEN.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        let Some((menu, deadline)) = pending.as_ref() else { return false; };
+        if game.ticks >= *deadline || server(game) != Some(&menu.address) {
+            pending.take();
+            return false;
+        }
+        if game.remote_menu_id() == 0 {
+            if game.screen != Screen::Playing { pending.take(); }
+            return false;
+        }
+        let close = game.carried.is_none() && open_menu(game).is_some_and(|(_, active)| active == *menu);
+        pending.take();
+        close
+    });
+    if close { close_window(game); }
 }
 
 fn diamonds(game: &Game<'_>, slot: usize) -> u32 {
@@ -111,6 +143,7 @@ impl Visit {
     pub(super) fn start(game: &mut Game<'_>, menu: &ShopMenu, minimum: u32) -> Option<Self> {
         if game.screen != Screen::Playing || game.carried.is_some() || game.remote_menu_id() != 0
             || server(game) != Some(&menu.address)
+            || ABANDONED_OPEN.with(|pending| pending.borrow().is_some())
         {
             return None;
         }
@@ -146,9 +179,21 @@ impl Visit {
         if !self.manual && let Phase::Sell { window, .. } = self.phase
             && game.carried.is_none() && self.verified(game, window)
         {
-            game.close_container();
-            game.screen = Screen::Playing;
-            game.capture(true);
+            close_window(game);
+        }
+    }
+
+    pub(super) fn cancel_for_avoidance(self, game: &mut Game<'_>) {
+        if self.manual || game.carried.is_some() { return; }
+        let Phase::Open { deadline } = self.phase else {
+            self.close(game);
+            return;
+        };
+        if open_menu(game).is_some_and(|(_, active)| active == self.menu) {
+            close_window(game);
+        } else if game.remote_menu_id() == 0 && game.ticks < deadline {
+            // The reply can arrive after the miner has already started backing away.
+            ABANDONED_OPEN.with(|pending| *pending.borrow_mut() = Some((self.menu, deadline)));
         }
     }
 
