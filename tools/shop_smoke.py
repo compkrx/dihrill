@@ -12,7 +12,7 @@ import time
 import zlib
 
 from extended_smoke import config_file, has_block, seed_config
-from smoke import CLIENT_FLAGS, INSTALLED, RESOURCES, free_port, game_process, ready
+from smoke import CLIENT_FLAGS, INSTALLED, RESOURCES, free_port, game_process, module_settings, ready
 
 
 TITLE = "QA Diamond Shop"
@@ -245,8 +245,7 @@ def check(client, root):
                     game.run(f"click-at {x} {y}")
                     time.sleep(0.25)
 
-                click(555, 192)
-                click(395, 352)
+                module_settings(game, "shop")
                 for x, value in ((395, 20), (570, 4)):
                     click(x, 266)
                     game.run(f"type {value}")

@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import time
 
-from smoke import CLIENT_FLAGS, INSTALLED, free_port, game_process, ready
+from smoke import CLIENT_FLAGS, INSTALLED, free_port, game_process, module_settings, ready
 
 
 def config_file(game_dir):
@@ -201,8 +201,7 @@ def local_run_timer(executable, run):
         game.run("options-set guiScale 1")
         game.run("key key.keyboard.f8 tap")
         game.wait_for("timer menu opens", lambda: game.run("screen")["screen"] == "mod")
-        game.run("click-at 405 192")
-        time.sleep(0.25)
+        module_settings(game, "mining")
 
         def open_timer():
             game.run("click-at 575 251")

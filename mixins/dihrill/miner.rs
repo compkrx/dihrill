@@ -62,6 +62,8 @@ struct Totals {
 struct Job {
     action: Action,
     shaft: Option<Shaft>,
+    find_only: bool,
+    found: Option<Pos>,
     phase: Phase,
     paused: bool,
     attack: bool,
@@ -98,7 +100,8 @@ struct Job {
     dump_next_slot: Option<usize>,
     inventory_alerted: bool,
     missing_target_tool: bool,
-    halt: Option<&'static str>,
+    retry_reason: Option<&'static str>,
+    retry_count: u8,
     heading: [i32; 2],
     origin: Pos,
     explored_steps: u32,
@@ -176,6 +179,7 @@ enum Phase {
     Selling,
     Exploring,
     Replanning,
+    Retrying,
     Waiting,
     Recovering,
     DiggingDown,
@@ -196,6 +200,7 @@ impl Phase {
             Self::Selling => "Selling diamonds",
             Self::Exploring => "Exploring",
             Self::Replanning => "Replanning",
+            Self::Retrying => "Waiting to rescan",
             Self::Waiting => "Waiting for gameplay",
             Self::Recovering => "Recovering",
             Self::DiggingDown => "Digging down",
@@ -258,6 +263,7 @@ pub(super) struct Snapshot {
     pub state: &'static str,
     pub running: bool,
     pub paused: bool,
+    pub finding: bool,
     pub destination: Option<Pos>,
     pub vein: Option<(usize, usize)>,
     pub mined: u32,
@@ -280,6 +286,8 @@ impl Job {
         Self {
             action: Action::Ready,
             shaft: None,
+            find_only: false,
+            found: None,
             phase: Phase::Scanning,
             paused: false,
             attack: false,
@@ -316,7 +324,8 @@ impl Job {
             dump_next_slot: None,
             inventory_alerted: false,
             missing_target_tool: false,
-            halt: None,
+            retry_reason: None,
+            retry_count: 0,
             heading: cardinal_heading(game.yaw),
             origin,
             explored_steps: 0,
@@ -348,8 +357,21 @@ impl Job {
         self.dump_ready = None;
         self.phase = Phase::Replanning;
         self.missing_target_tool = false;
-        self.halt = None;
+        self.retry_reason = None;
         self.pickup = None;
+    }
+
+    fn schedule_rescan(&mut self, now: u64, reason: &'static str) {
+        self.replan(now);
+        self.vein = None;
+        self.failures = 0;
+        self.blocked_edges.clear();
+        self.blocked_approaches.clear();
+        self.retry_at = now + (40 << self.retry_count.min(2));
+        self.retry_count = self.retry_count.saturating_add(1);
+        self.retry_reason = Some(reason);
+        self.phase = Phase::Retrying;
+        self.last_progress = Instant::now();
     }
 
     fn visit(&mut self, pos: Pos) {
@@ -434,6 +456,22 @@ pub(super) fn set_run_timer(game: &Game<'_>, seconds: u32) {
     });
 }
 
+pub(super) fn hud_settings() -> super::dihrill_settings::HudSettings {
+    MINER.with(|state| state.borrow().settings.hud)
+}
+
+pub(super) fn update_hud(
+    game: &Game<'_>, update: impl FnOnce(&mut super::dihrill_settings::HudSettings),
+) {
+    load(game);
+    MINER.with(|state| {
+        let mut miner = state.borrow_mut();
+        update(&mut miner.settings.hud);
+        miner.settings.normalize();
+        miner.settings.save(game);
+    });
+}
+
 pub(super) fn snapshot(game: &Game<'_>) -> Snapshot {
     MINER.with(|state| {
         let miner = state.borrow();
@@ -451,6 +489,7 @@ pub(super) fn snapshot(game: &Game<'_>) -> Snapshot {
             state,
             running,
             paused,
+            finding: job.is_some_and(|job| job.find_only),
             destination: job.and_then(Job::destination),
             vein: job.and_then(|job| job.vein.as_ref()).map(|vein| {
                 let (total, mined) = vein.counts();
@@ -463,9 +502,13 @@ pub(super) fn snapshot(game: &Game<'_>) -> Snapshot {
             distance: totals.distance,
             durability: game.inventory.get(game.selected).and_then(Option::as_ref)
                 .and_then(|stack| durability(game, stack)),
-            message: if job.is_some_and(|j| !j.paused && matches!(j.phase, Phase::Waiting)) {
-                "Close the open screen to continue mining.".into()
-            } else { miner.message.clone() },
+            message: match job.filter(|j| !j.paused) {
+                Some(job) if matches!(job.phase, Phase::Waiting) => {
+                    "Close the open screen to continue the run.".into()
+                }
+                Some(job) => job.retry_reason.map_or_else(|| miner.message.clone(), str::to_owned),
+                _ => miner.message.clone(),
+            },
             remaining: job.and_then(|j| j.run_remaining).map(|t| {
                 t.as_secs() as u32 + u32::from(t.subsec_nanos() > 0)
             }),
@@ -479,7 +522,7 @@ fn other_automation(game: &Game<'_>) -> bool {
     game.agent.task.as_ref().is_some_and(|task| task.kind.releases_input())
 }
 
-fn validate_start(game: &Game<'_>, settings: &Settings, shaft: bool) -> Result<(), &'static str> {
+fn validate_start(game: &Game<'_>, settings: &Settings, shaft: bool, find_only: bool) -> Result<(), &'static str> {
     if game.title.is_some() || game.player.is_none() || game.remote_loading() || game.mode_id() != 0 {
         return Err("Enter a Survival world first.");
     }
@@ -493,25 +536,36 @@ fn validate_start(game: &Game<'_>, settings: &Settings, shaft: bool) -> Result<(
     if settings.profile == Profile::Area && settings.area.is_none() {
         return Err("Set both area corners before starting Area Miner.");
     }
-    if settings.profile == Profile::Quantity && matches!(settings.goal, Goal::Unlimited) {
+    if !find_only && settings.profile == Profile::Quantity && matches!(settings.goal, Goal::Unlimited) {
         return Err("Set a block or item quantity before starting Quantity Miner.");
     }
     Ok(())
 }
 
 pub(super) fn run_from_menu(game: &mut Game<'_>) -> String {
+    start_job(game, false)
+}
+
+pub(super) fn find_from_menu(game: &mut Game<'_>) -> String {
+    start_job(game, true)
+}
+
+fn start_job(game: &mut Game<'_>, find_only: bool) -> String {
     load(game);
     MINER.with(|state| {
         let mut miner = state.borrow_mut();
-        let message = match validate_start(game, &miner.settings, false) {
+        let message = match validate_start(game, &miner.settings, false, find_only) {
             Err(reason) => reason,
             Ok(()) => {
-                release(game, miner.job.as_mut());
-                miner.job = Some(Job::new(game, &miner.settings));
+                stop(game, &mut miner, "");
+                let mut job = Job::new(game, &miner.settings);
+                job.find_only = find_only;
+                miner.job = Some(job);
                 miner.ended = false;
                 super::dihrill_shelter::cancel(game);
                 game.native_mod_screen_close(ID);
-                "Started mining. Open the miner menu to pause or stop."
+                if find_only { "Finding selected blocks along walkable routes." }
+                else { "Started mining. Open the miner menu to pause or stop." }
             }
         };
         miner.message = message.into();
@@ -535,7 +589,7 @@ pub(super) fn run_shaft_from_menu(game: &mut Game<'_>, direction: ShaftDirection
     load(game);
     MINER.with(|state| {
         let mut miner = state.borrow_mut();
-        if let Err(reason) = validate_start(game, &miner.settings, true) {
+        if let Err(reason) = validate_start(game, &miner.settings, true, false) {
             return reason.into();
         }
         if miner.job.is_some() {
@@ -566,7 +620,8 @@ pub(super) fn resume_from_menu(game: &mut Game<'_>) -> String {
     MINER.with(|state| {
         let mut miner = state.borrow_mut();
         let shaft = miner.job.as_ref().is_some_and(|job| job.shaft.is_some());
-        let message = match validate_start(game, &miner.settings, shaft) {
+        let find_only = miner.job.as_ref().is_some_and(|job| job.find_only);
+        let message = match validate_start(game, &miner.settings, shaft, find_only) {
             Err(reason) => reason,
             Ok(()) => match &mut miner.job {
                 None => "No paused job. Start a new job from the miner menu.",
@@ -597,6 +652,7 @@ pub(super) fn resume_from_menu(game: &mut Game<'_>) -> String {
                     job.pickup_seen = false;
                     read_inventory(game, &mut job.inventory);
                     job.failures = 0;
+                    job.retry_count = 0;
                     job.blocked_edges.clear();
                     job.blocked_approaches.clear();
                     job.blocked.clear();
@@ -604,7 +660,7 @@ pub(super) fn resume_from_menu(game: &mut Game<'_>) -> String {
                     job.replan(game.ticks);
                     super::dihrill_shelter::cancel(game);
                     game.native_mod_screen_close(ID);
-                    "Resumed mining."
+                    if find_only { "Resumed block search." } else { "Resumed mining." }
                 }
             },
         };
@@ -1201,6 +1257,7 @@ fn observe(game: &Game<'_>, settings: &Settings, job: &mut Job) {
     if moved >= 0.25 {
         job.progress_position = position;
         job.last_progress = Instant::now();
+        job.retry_count = 0;
     }
     job.previous_position = position;
 
@@ -1296,11 +1353,15 @@ fn junk_pickup_risk(game: &Game<'_>, settings: &Settings, job: &Job) -> HashSet<
 
 fn junk_slot(game: &Game<'_>, settings: &Settings, job: &Job, start: usize) -> Option<usize> {
     let reserve_pillar = job.shaft.as_ref().is_some_and(|shaft| shaft.direction == ShaftDirection::Up);
-    let shelter_slot = game.inventory[..9].iter().enumerate().filter_map(|(index, stack)| {
-        let stack = stack.as_ref()?;
-        (stack.count > 0 && stack.extra.is_none() && stack.damage == 0 && pillar_material(&stack.item))
-            .then_some((index, stack.count))
-    }).max_by_key(|&(_, count)| count).map(|(index, _)| index);
+    let shelter_slot = if settings.shelter_on_stop || settings.retreat_barricade {
+        game.inventory[..9].iter().enumerate().filter_map(|(index, stack)| {
+            let stack = stack.as_ref()?;
+            (stack.count > 0 && stack.extra.is_none() && stack.damage == 0 && pillar_material(&stack.item))
+                .then_some((index, stack.count))
+        }).max_by_key(|&(_, count)| count).map(|(index, _)| index)
+    } else {
+        None
+    };
     (start..36).find(|&index| {
         let slot = &game.inventory[index];
         slot.as_ref().is_some_and(|stack| {
@@ -1575,7 +1636,8 @@ fn shaft_landing(game: &Game<'_>, job: &mut Job, here: Pos, to: Pos, deadline: u
 
 fn search_options(game: &Game<'_>, settings: &Settings, job: &Job) -> SearchOptions {
     SearchOptions {
-        tunnel: settings.profile != Profile::Cave,
+        tunnel: !job.find_only && settings.profile != Profile::Cave,
+        find_only: job.find_only,
         max_fall: settings.max_fall,
         blocked_edges: job.blocked_edges.clone(),
         blocked_approaches: job.blocked_approaches.clone(),
@@ -1588,9 +1650,13 @@ fn search_options(game: &Game<'_>, settings: &Settings, job: &Job) -> SearchOpti
 
 fn setback(job: &mut Job, now: u64) -> Result<(), String> {
     job.failures = job.failures.saturating_add(1);
-    job.replan(now);
     if job.failures >= MAX_FAILURES {
-        return Err("Paused after repeated blocked routes or mining actions. Check the area and resume.".into());
+        if job.shaft.is_some() || job.storage.is_some() {
+            return Err("Paused after repeated blocked routes or actions. Check the area and resume.".into());
+        }
+        job.schedule_rescan(now, "Repeated route obstructions. Waiting for a fresh scan.");
+    } else {
+        job.replan(now);
     }
     Ok(())
 }
@@ -1632,6 +1698,7 @@ fn targets_may_be_present(game: &Game<'_>, settings: &Settings, here: Pos) -> bo
 }
 
 fn scan_next(game: &Game<'_>, settings: &Settings, job: &mut Job, here: Pos) -> Result<(), String> {
+    job.retry_reason = None;
     if job.scan.is_none() {
         let mut remaining_vein = None;
         if let Some(vein) = &mut job.vein {
@@ -1651,7 +1718,7 @@ fn scan_next(game: &Game<'_>, settings: &Settings, job: &mut Job, here: Pos) -> 
             if !job.deep_scan && settings.explore && settings.profile != Profile::Area {
                 begin_explore(game, settings, job, here)?;
             } else {
-                job.halt = Some("No selected blocks are visible in the loaded search area.");
+                job.schedule_rescan(game.ticks, "No selected blocks in loaded terrain. Will rescan.");
             }
         } else {
             let mut options = search_options(game, settings, job);
@@ -1686,7 +1753,7 @@ fn scan_next(game: &Game<'_>, settings: &Settings, job: &mut Job, here: Pos) -> 
         }
         SearchResult::Found(path) => {
             job.scan = None;
-            if path.kind == RouteKind::Target && job.vein.is_none() {
+            if path.kind == RouteKind::Target && !job.find_only && job.vein.is_none() {
                 let mut world = WorldRead::new(game, settings, &job.blocked, &job.mob_zones);
                 let family = world.cell(path.target).vein;
                 if family != 0 {
@@ -1699,11 +1766,7 @@ fn scan_next(game: &Game<'_>, settings: &Settings, job: &mut Job, here: Pos) -> 
         }
         SearchResult::Exhausted => {
             job.scan = None;
-            if let Some(vein) = job.vein.take() {
-                for pos in vein.remaining() {
-                    if job.blocked.len() >= MAX_BLOCKED { break; }
-                    job.blocked.insert(pos);
-                }
+            if job.vein.take().is_some() {
                 job.phase = Phase::Selecting;
             } else if std::mem::take(&mut job.exploring_scan) {
                 if settings.profile == Profile::Branch && job.branch != Branch::Main {
@@ -1713,14 +1776,16 @@ fn scan_next(game: &Game<'_>, settings: &Settings, job: &mut Job, here: Pos) -> 
                     job.deep_scan = true;
                     job.phase = Phase::Selecting;
                 }
-            } else if job.missing_target_tool {
+            } else if !job.deep_scan && can_explore(settings, job) {
+                begin_explore(game, settings, job, here)?;
+            } else if job.missing_target_tool && !job.find_only {
                 return Err("A nearby target needs a suitable hotbar tool above the durability limit.".into());
             } else if job.deep_scan {
-                job.halt = Some("No safe route here. Try starting in a dry, two-block-high tunnel.");
+                job.schedule_rescan(game.ticks, "No safe route in loaded terrain. Will rescan.");
             } else if settings.explore && settings.profile != Profile::Area {
                 begin_explore(game, settings, job, here)?;
             } else {
-                job.halt = Some("No reachable selected blocks in loaded terrain.");
+                job.schedule_rescan(game.ticks, "No reachable selected blocks in loaded terrain. Will rescan.");
             }
         }
     }
@@ -1753,24 +1818,25 @@ fn begin_explore(game: &Game<'_>, settings: &Settings, job: &mut Job, here: Pos)
     let remaining = if settings.continuous_explore { 10 }
         else { settings.explore_limit.saturating_sub(job.explored_steps) };
     if remaining == 0 {
-        job.halt = Some("The configured exploration distance was reached.");
+        job.schedule_rescan(game.ticks, "Exploration limit reached. Waiting for reachable targets.");
         return Ok(());
     }
     let [hx, hz] = job.heading;
     let mut options = search_options(game, settings, job);
-    let tunnel = matches!(settings.profile, Profile::Tunnel | Profile::Branch | Profile::Hunter | Profile::Quantity);
-    if matches!(settings.profile, Profile::Tunnel | Profile::Branch) {
+    let profile = if job.find_only { Profile::Cave } else { settings.profile };
+    let tunnel = matches!(profile, Profile::Tunnel | Profile::Branch | Profile::Hunter | Profile::Quantity);
+    if matches!(profile, Profile::Tunnel | Profile::Branch) {
         options.tunnel_height = settings.tunnel_height;
         options.tunnel_width = settings.tunnel_width;
     }
     let forward = [here[0] + hx * 6, here[1], here[2] + hz * 6];
-    let preferred = match settings.profile {
+    let preferred = match profile {
         Profile::Tunnel => Some(forward),
         Profile::Branch => Some(branch_waypoint(job, settings, here)),
         _ => None,
     };
     let radius = settings.radius.min(10).min(remaining as i32).max(1);
-    if settings.profile == Profile::Branch && job.branch == Branch::Return {
+    if profile == Profile::Branch && job.branch == Branch::Return {
         let target = preferred.expect("branch has a waypoint");
         options.tunnel = false;
         options.tunnel_height = 2;
@@ -1797,7 +1863,7 @@ fn follow_route(game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: P
     let kind = path.kind;
     let target = path.target;
     let next_step = path.steps.front().copied();
-    if kind == RouteKind::Target && next_step.is_some()
+    if kind == RouteKind::Target && !job.find_only && next_step.is_some()
         && begin_visible_mining(game, settings, job, here, Some(target))
     {
         return Ok(true);
@@ -1811,7 +1877,7 @@ fn follow_route(game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: P
         let (height, width) = if kind == RouteKind::Explore && matches!(settings.profile, Profile::Tunnel | Profile::Branch) {
             (settings.tunnel_height, settings.tunnel_width)
         } else { (2, 1) };
-        let tunnel = kind != RouteKind::Destination && settings.profile != Profile::Cave;
+        let tunnel = !job.find_only && kind != RouteKind::Destination && settings.profile != Profile::Cave;
         let Some((verified, _)) = route::transition_configured(
             &mut |pos| world.cell(pos), here, step.to, tunnel, settings.max_fall, height, width,
         ) else {
@@ -1829,6 +1895,16 @@ fn follow_route(game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: P
     } else {
         job.route = None;
         match kind {
+            RouteKind::Target if job.find_only => {
+                if game.aim_block(target, None).is_ok() {
+                    job.found = Some(target);
+                } else {
+                    if job.blocked_approaches.len() < MAX_BLOCKED {
+                        job.blocked_approaches.insert((here, target));
+                    }
+                    setback(job, now)?;
+                }
+            }
             RouteKind::Target => {
                 job.phase = Phase::Mining;
                 job.action = Action::Aim { pos: target, target: true, started: now };
@@ -1884,7 +1960,7 @@ fn step_walk(
             }
             if job.recent_stands.is_empty() { job.recent_stands.push_back(step.to); }
             let direction = std::array::from_fn(|axis| step.to[axis] - step.from[axis]);
-            if let Some(evasion) = &mut job.evasion
+            if settings.retreat_barricade && !job.find_only && let Some(evasion) = &mut job.evasion
                 && matches!(evasion.wall, EscapeWall::Ready)
                 && let Some(wall) = escape_wall_site(game, settings, step.to, direction, 3.2)
             {
@@ -2083,6 +2159,7 @@ fn step_aim(
 
 fn mined_block(game: &Game<'_>, job: &mut Job, pos: Pos, target: bool, before: BlockStateId) {
     job.last_progress = Instant::now();
+    job.retry_count = 0;
     if target {
         let block = Arc::clone(&game.res.facts().get(before).name);
         job.drops.push_back(DropBatch {
@@ -2516,7 +2593,7 @@ fn advance_storage(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Outcome { Active, Complete(&'static str) }
+enum Outcome { Active, Complete(&'static str), Found(Pos) }
 
 fn evade(game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: Pos, hurt: bool) -> bool {
     let now = game.ticks;
@@ -2592,7 +2669,7 @@ fn evade(game: &mut Game<'_>, settings: &Settings, job: &mut Job, here: Pos, hur
         if let Some(step) = escape_step(game, settings, job, here, failed) {
             let direction = std::array::from_fn(|axis| step.to[axis] - step.from[axis]);
             let evasion = job.evasion.as_mut().expect("active evasion");
-            if matches!(evasion.wall, EscapeWall::Ready)
+            if settings.retreat_barricade && !job.find_only && matches!(evasion.wall, EscapeWall::Ready)
                 && let Some(wall) = escape_wall_site(game, settings, here, direction, 4.2)
             {
                 evasion.wall = wall;
@@ -2630,7 +2707,7 @@ fn advance(game: &mut Game<'_>, settings: &Settings, job: &mut Job, hurt: bool) 
         }
     }
     observe(game, settings, job);
-    if goal_met(settings, job) && job.pickup.is_none() && job.drops.is_empty() && job.shop.is_none() && matches!(job.action, Action::Ready) {
+    if !job.find_only && goal_met(settings, job) && job.pickup.is_none() && job.drops.is_empty() && job.shop.is_none() && matches!(job.action, Action::Ready) {
         return Ok(Outcome::Complete(if job.shaft.is_some() {
             "Vertical digging finished."
         } else {
@@ -2691,7 +2768,11 @@ fn advance(game: &mut Game<'_>, settings: &Settings, job: &mut Job, hurt: bool) 
             }
         }
         Action::Ready => {
-            if job.shaft.as_ref().is_some_and(|shaft| shaft.pending_landing.is_some()) {
+            if job.find_only {
+                if ground(game) && now >= job.retry_at && !follow_route(game, settings, job, here)? {
+                    scan_next(game, settings, job, here)?;
+                }
+            } else if job.shaft.as_ref().is_some_and(|shaft| shaft.pending_landing.is_some()) {
                 step_shaft(game, settings, job, here)?;
             } else if job.storage.is_some() {
                 step_storage(game, settings, job, here)?;
@@ -2711,12 +2792,7 @@ fn advance(game: &mut Game<'_>, settings: &Settings, job: &mut Job, hurt: bool) 
             }
         }
     }
-    if !job.mob_zones.is_empty() && job.halt.is_some_and(|reason| reason.starts_with("No ")) {
-        job.replan(now);
-        job.retry_at = now + 40;
-        job.last_progress = Instant::now();
-    }
-    Ok(job.halt.map_or(Outcome::Active, Outcome::Complete))
+    Ok(job.found.map_or(Outcome::Active, Outcome::Found))
 }
 
 pub(in crate::game) fn shop_manual() {
@@ -2741,12 +2817,13 @@ pub(in crate::game) fn tick(game: &mut Game<'_>) {
             stop(game, &mut miner, "Stopped because the world or player state changed.");
             return;
         }
+        let emergency_exit = miner.settings.emergency_exit;
         let job = miner.job.as_mut().expect("active miner");
         let player = game.player.as_ref().expect("surviving player");
         let health = player.health.health();
         let hurt = health < job.last_health || player.health.hurt_animation_time > 0;
         job.last_health = health;
-        if health <= 6.0 && (hurt || player.fire_ticks > 0) {
+        if emergency_exit && health <= 6.0 && (hurt || player.fire_ticks > 0) {
             let reason = "Critical health while taking damage.";
             stop(game, &mut miner, reason);
             miner.emergency_exit = Some(reason);
@@ -2800,22 +2877,33 @@ pub(in crate::game) fn tick(game: &mut Game<'_>) {
         } else if job.evasion.is_none() && matches!(job.action, Action::Ready)
             && now.duration_since(job.last_progress) >= STALL_LIMIT
         {
-            let state = job.phase.label();
-            Err(format!("Paused after 40 seconds without progress ({state})."))
+            if job.shaft.is_none() && job.storage.is_none() && job.shop.is_none() {
+                job.schedule_rescan(game.ticks, "No progress for 40 seconds. Waiting for a fresh scan.");
+                Ok(Outcome::Active)
+            } else {
+                Err(format!("Paused after 40 seconds without progress ({}).", job.phase.label()))
+            }
         } else {
             advance(game, settings, job, hurt)
         };
         match outcome {
             Ok(Outcome::Active) => (),
             Ok(Outcome::Complete(reason)) => {
+                let shelter = settings.shelter_on_stop && !job.find_only;
                 stop(game, &mut miner, reason);
                 say(game, &miner.message);
-                super::dihrill_shelter::begin(game);
+                if shelter { super::dihrill_shelter::begin(game); }
+            }
+            Ok(Outcome::Found([x, y, z])) => {
+                let block = facts_at(game, [x, y, z]).map_or("Selected block", |facts|
+                    facts.name.strip_prefix("minecraft:").unwrap_or(&facts.name));
+                let message = format!("Found {block} at {x}, {y}, {z}.");
+                stop(game, &mut miner, &message);
+                say(game, &message);
             }
             Err(reason) => {
                 pause(game, &mut miner, &reason);
                 say(game, &reason);
-                super::dihrill_shelter::begin(game);
             }
         }
     });

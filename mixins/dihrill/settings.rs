@@ -81,6 +81,41 @@ pub(super) enum Goal {
     Items(String, u32),
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum HudPosition {
+    #[default]
+    AboveHotbar,
+    TopLeft,
+    TopRight,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub(super) struct HudSettings {
+    pub visible: bool,
+    pub position: HudPosition,
+    pub counters: bool,
+    pub timer: bool,
+    pub destination: bool,
+    pub background: u8,
+    pub amber: bool,
+}
+
+impl Default for HudSettings {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            position: HudPosition::AboveHotbar,
+            counters: true,
+            timer: true,
+            destination: false,
+            background: 74,
+            amber: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub(super) struct Settings {
@@ -91,6 +126,9 @@ pub(super) struct Settings {
     pub shallow_water: bool,
     pub avoid_caves: bool,
     pub avoid_mobs: bool,
+    pub shelter_on_stop: bool,
+    pub retreat_barricade: bool,
+    pub emergency_exit: bool,
     pub mob_radius: u8,
     pub profile: Profile,
     pub explore: bool,
@@ -115,6 +153,7 @@ pub(super) struct Settings {
     pub diamond_shop: Option<ShopMenu>,
     pub shop_min_diamonds: u32,
     pub shop_interval_seconds: u32,
+    pub hud: HudSettings,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -134,6 +173,9 @@ impl Default for Settings {
             shallow_water: false,
             avoid_caves: true,
             avoid_mobs: true,
+            shelter_on_stop: true,
+            retreat_barricade: true,
+            emergency_exit: true,
             mob_radius: 12,
             profile: Profile::Hunter,
             explore: true,
@@ -158,6 +200,7 @@ impl Default for Settings {
             diamond_shop: None,
             shop_min_diamonds: 64,
             shop_interval_seconds: 60,
+            hud: HudSettings::default(),
         }
     }
 }
@@ -227,6 +270,7 @@ impl Settings {
         self.mob_radius = self.mob_radius.clamp(6, 24);
         self.shop_min_diamonds = self.shop_min_diamonds.clamp(1, MAX_SHOP_DIAMONDS);
         self.shop_interval_seconds = self.shop_interval_seconds.clamp(1, MAX_SHOP_INTERVAL);
+        self.hud.background = self.hud.background.min(100);
         self.explore_limit = self.explore_limit.clamp(8, 256);
         self.branch_spacing = self.branch_spacing.clamp(4, 32);
         self.tunnel_width = self.tunnel_width.clamp(1, 3);

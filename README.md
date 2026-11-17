@@ -6,7 +6,7 @@ Choose the release that matches your Horizon build.
 
 | Horizon Nightly | Dihrill release |
 | --- | --- |
-| November 13, 2026 (`9f42064`) | [v0.9.3](https://github.com/compkrx/dihrill/releases/tag/v0.9.3) · [v0.9.2](https://github.com/compkrx/dihrill/releases/tag/v0.9.2) |
+| November 13, 2026 (`9f42064`) | [v0.9.4](https://github.com/compkrx/dihrill/releases/tag/v0.9.4) · [v0.9.3](https://github.com/compkrx/dihrill/releases/tag/v0.9.3) · [v0.9.2](https://github.com/compkrx/dihrill/releases/tag/v0.9.2) |
 | November 8, 2026 (`fdc87ae`) | [v0.9.1](https://github.com/compkrx/dihrill/releases/tag/v0.9.1) |
 
 ## Install
@@ -14,13 +14,21 @@ Choose the release that matches your Horizon build.
 1. Select the matching nightly in the Horizon launcher.
 2. Copy the matching `.hnmod` into the instance's `horizon-native-mods` folder. Use **Mods → Open folder** if available. Move the previous package out of that folder before installing Dihrill. On first launch, Dihrill copies existing mining settings into its own settings folder.
 3. Choose **Mods → Native build → Build** and launch the resulting build.
-4. In Survival, put suitable tools in your hotbar, open your inventory, and click **Dihrill**. **F8** also opens the menu and can be rebound in Controls.
+4. In Survival, put suitable tools in your hotbar, then press **F8** or click **Dihrill** in your inventory.
+
+## Modules, keybinds and HUD
+
+Left-click a module to toggle it or open its main controls. Right-click a module to expand its settings. Hover a row for a description. **Keybinds** lets you edit the menu, pause/resume, HUD and stop keys. Click a binding and press a key. **Backspace** clears it and **Esc** cancels. **Reset** restores the default. The inventory button can always open the menu.
+
+Right-click **Mining HUD** to change its position, background opacity, text color and which counters, timer or destination appear. HUD settings apply immediately.
 
 ## Mine
 
 Select blocks in **Targets** and put higher-priority targets near the top. The miner weighs priority and route cost. It finishes reachable blocks in the current vein before choosing another. You can enable diagonal connections and include both regular and deepslate forms in the same vein.
 
-Set a profile in **Mining**, then click **Start**. **Pause** preserves the job and **Resume** continues it. Press **F9** during play to pause or resume, or change the binding in Controls. **Stop** ends the job. The menu shows progress, destination, distance walked, tool durability, and the last warning. Settings persist across restarts. Jobs start idle after reconnecting or changing worlds.
+Set a profile in **Mining settings**, then click **Start**. **Pause** preserves the job and **Resume** continues it. **F9** pauses or resumes by default. **Stop** ends the job. The menu shows progress, destination, distance walked, tool durability, and the last warning. Settings persist across restarts. Jobs start idle after reconnecting or changing worlds.
+
+To locate a block, choose it in **Targets**, then left-click **Block finder**. The finder follows walkable routes in loaded terrain, stops when it can see a matching block, and reports its coordinates. Finding can use existing passages to explore when enabled. The find and mine actions are separate, following the distinction in Baritone’s API. [Baritone’s block-finding interface](https://baritone.leijurv.com/baritone/api/process/IGetToBlockProcess.html)
 
 | Profile | Behavior |
 | --- | --- |
@@ -31,7 +39,7 @@ Set a profile in **Mining**, then click **Start**. **Pause** preserves the job a
 | Area Miner | Limit mining to a cuboid set by two block coordinates. |
 | Quantity Miner | Stop after a block count or a count of newly collected items. |
 
-In **Mining**, enable **Explore** and **Continuous exploration** to keep searching past the usual distance limit. The selection only affects exploration. Dihrill still stops at your mining quota or when it runs out of safe routes, and can pause for tool wear or inventory problems.
+In **Mining settings**, enable **Explore** and **Continuous exploration** to keep searching past the usual distance limit. Dihrill stops at your mining quota or timer. When routes are temporarily unavailable it waits and rescans, and it can pause for tool wear or inventory problems.
 
 Open **Mining → Run timer** and type a custom duration. A plain number such as `25` means minutes. Use `8:45` for minutes and seconds, `2:15:30` for hours, minutes and seconds, or units such as `1d 3h 5m 17s`. The editor previews the duration before you apply it. Select **Turn off** or enter `0` to disable the timer.
 
@@ -73,14 +81,14 @@ Turns ease in and out through Horizon’s normal camera input. Dihrill checks wh
 - Routes exclude lava, waterlogged blocks, gravel, and other unstable blocks. Water is avoided by default. **Safety → Shallow wading** allows crossing thin flowing water on level, solid ground with dry headroom. Deep water, falling water, and mining from water stay excluded. The miner checks support and surrounding terrain before clearing a block. Choose a maximum fall of one to three blocks. One block is the default.
 - **Safety → Cave / mob avoidance** gives you two independent controls, both on by default. Cave avoidance rejects routes into large underground openings and skips blocks that would break through into them. A one-block-wide vertical shaft by itself does not count as a cave. Turn cave avoidance off for intentional cave mining.
 - Mob avoidance defaults to a 12-block detection radius, adjustable from 6 to 24 blocks. Dihrill backs away from threats, temporarily avoids the area, then replans the mining run and returns to its normal shop schedule. It can block off a narrow, dry tunnel behind you when a mob is following and it has room to place two blocks. It can use a safety exit at three hearts or lower while taking damage or burning.
-- When a run stops automatically, Dihrill attempts a shelter using cobblestone or cobbled deepslate from your hotbar. It reuses solid walls and a roof when possible. Keep a spare stack in your hotbar for retreats and shelter. The player must be steady near the center of a block on solid ground. Dihrill confirms placements and reports if terrain or server permissions prevent closing the shelter.
+- **Safety options** lets you toggle auto shelter, retreat walls and emergency exit independently. Auto shelter attempts an enclosure after a mining quota, timer, shaft or low-health stop. A blocked search leaves the miner waiting in place for a fresh route. Keep a spare stack of cobblestone or cobbled deepslate in your hotbar for building. Shelter requires steady footing near the center of a full block and confirms each placement.
 - Set a durability floor and choose fastest tool, Fortune, or Silk Touch. The miner uses the hotbar and pauses if it cannot proceed safely.
 - The junk list starts empty. Pick individual filler types in **Inventory**. When the inventory fills, Dihrill drops every stack of checked junk, then plans a route that prefers to avoid the pile. In a single passage it can still pick up junk that blocks the only route. The miner protects selected resources, configured valuable items, equipment, and customized stacks.
 - Storage is off by default. Set the coordinates of a placed chest, trapped chest, or barrel. When full, the miner can walk there and deposit selected resources from the main inventory. It leaves hotbar items alone and pauses if it cannot use the container.
 
 ## Limits
 
-Searches use loaded client terrain with bounded route and exploration budgets. Before searching for a route to ore, Dihrill checks chunk palettes for your selected blocks. When those palettes rule out a target, it skips the ore search and moves on to exploration if enabled. When a target may be present, Dihrill first tries a short search and can fall back to a wider one. If it spends 40 seconds waiting for a route without movement or mining progress, it pauses and reports what it was doing. A server can kick a player for idling after mining stops or pauses. Start near the height of your target ore. Anti-xray can conceal ore from the client. The miner does not bridge gaps, swim, place torches, fight mobs, or override rejected server actions. The planner uses full-block support, so routes over some slabs and other partial blocks may be unavailable. Depleted tools and full inventory can pause a run. Use it on servers where the owner permits automation. The multiplayer tests use a stock Horizon dedicated server on localhost.
+Searches use loaded client terrain with bounded route and exploration budgets. Chunk palettes can rule out absent targets and let the miner explore sooner. Dihrill tries a short search and can fall back to a wider one. Exhausted routes retry with a delay. A general mining stall after 40 seconds also starts a fresh scan. A server can kick a player for idling while the job waits. Start near the height of your target ore. Anti-xray can conceal ore from the client. The planner uses full-block support, so routes over some slabs and other partial blocks may be unavailable. Depleted tools and full inventory can pause a run. Use it on servers where the owner permits automation. The multiplayer tests use a stock Horizon dedicated server on localhost.
 
 ## Troubleshooting
 
@@ -98,7 +106,7 @@ Searches use loaded client terrain with bounded route and exploration budgets. B
 - Horizon Mixins `5a64af938ec86b00d53d16a408aabc0038fb3e57`
 - Launcher Rust `1.99.1-x86_64-pc-windows-gnu`
 
-Run `python tools/package.py --output Dihrill-26.3-9f42064-v0.9.3.hnmod` to package the Rust sources. Run `python tools/build.py --help` for pinned build arguments. Compile the standalone planner suite with `rustc --edition 2024 --test tools/route_tests.rs` and run the resulting executable. Run the Python smoke tests in `tools/` with the compiled Horizon client and a scratch output directory.
+Run `python tools/package.py --output Dihrill-26.3-9f42064-v0.9.4.hnmod` to package the Rust sources. Run `python tools/build.py --help` for pinned build arguments. Compile the standalone planner suite with `rustc --edition 2024 --test tools/route_tests.rs` and run the resulting executable. Run the Python smoke tests in `tools/` with the compiled Horizon client and a scratch output directory.
 
 On Windows, clone the pinned Horizon source with `git -c core.symlinks=false clone` so the mixin staging tool can copy all files. Set `DIHRILL_TEST_RESOURCES` to the prepared 26.3 resource directory if it is outside the nightly's game folder.
 

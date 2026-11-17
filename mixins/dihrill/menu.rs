@@ -1,5 +1,5 @@
 use super::dihrill::{self as miner, Snapshot};
-use super::dihrill_settings::{self as config, Goal, Pace, Profile, Settings, ShaftDirection, Tool};
+use super::dihrill_settings::{self as config, Goal, HudPosition, Pace, Profile, Settings, ShaftDirection, Tool};
 use super::{Game, Screen};
 use horizon_client::{hud::HudBatch, mod_api::{NativeMod, NativeScreenView}};
 use std::cell::RefCell;
@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 const ID: &str = config::ID;
 const MENU_KEY: &str = "key.keyboard.f8";
 const PAUSE_KEY: &str = "key.keyboard.f9";
+const UNBOUND: &str = "key.keyboard.unknown";
 const TEXT: u32 = 0xf8f4ff;
 const MUTED: u32 = 0xc3b8d6;
 const AMBER: u32 = 0xffd391;
@@ -15,7 +16,11 @@ const ROW: f32 = 18.0;
 type Rect = [f32; 4];
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum Page { #[default] Targets, Mining, Safety, Inventory, Status, Shop, Avoidance, Vertical }
+enum Page {
+    #[default]
+    Modules,
+    Targets, Mining, Safety, Inventory, Status, Shop, Avoidance, Vertical, Hud, Bindings,
+}
 const PAGES: [(Page, &str); 5] = [
     (Page::Targets,"Targets"), (Page::Mining,"Mining"), (Page::Safety,"Safety"),
     (Page::Inventory,"Inventory"), (Page::Status,"Status"),
@@ -61,6 +66,50 @@ struct Editor { field: Field, value: String, replace: bool }
 #[derive(Clone, Copy)]
 enum Number { Radius, ExploreLimit, BranchSpacing, Width, Height, MaxFall, Turn, Durability, MobRadius }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Binding { Menu, Pause, Hud, Stop }
+
+impl Binding {
+    const ALL: [Self; 4] = [Self::Menu, Self::Pause, Self::Hud, Self::Stop];
+
+    fn entry(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Menu => ("menu", "Open module menu", MENU_KEY),
+            Self::Pause => ("pause", "Pause or resume", PAUSE_KEY),
+            Self::Hud => ("hud", "Toggle HUD", UNBOUND),
+            Self::Stop => ("stop", "Stop the run", UNBOUND),
+        }
+    }
+
+    fn key(self, game: &Game<'_>) -> String {
+        let (id, _, default) = self.entry();
+        game.native_mod_key(ID, id, default)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Module {
+    Mining, Finder, Shaft, Inventory, Caves, Mobs, Shelter, Shop, Hud, Bindings, Status,
+}
+
+impl Module {
+    fn label(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Mining => ("Ore miner", "Mine selected blocks and collect their drops."),
+            Self::Finder => ("Block finder", "Walk to a selected block and report its coordinates."),
+            Self::Shaft => ("Vertical dig", "Dig a shaft one supported level at a time."),
+            Self::Inventory => ("Inventory", "Manage junk, protected items and storage."),
+            Self::Caves => ("Cave avoidance", "Route around large underground openings."),
+            Self::Mobs => ("Mob avoidance", "Back away from nearby hostile mobs."),
+            Self::Shelter => ("Auto shelter", "Build shelter after a completed run or a low-health stop."),
+            Self::Shop => ("Diamond shop", "Sell diamonds using the configured server shop."),
+            Self::Hud => ("Mining HUD", "Show run details during gameplay."),
+            Self::Bindings => ("Keybinds", "Change the menu, pause, HUD and stop keys."),
+            Self::Status => ("Run status", "See progress and the last stop or rescan reason."),
+        }
+    }
+}
+
 #[derive(Clone)]
 enum Click {
     Inventory, Page(Page), Filter(Filter), Target(String), Priority(String,bool),
@@ -69,6 +118,9 @@ enum Click {
     Diagonals, Sprint, Pace, ShallowWater, Tool(Tool), Junk(&'static str), ClearJunk,
     Alerts, StorageLook, ClearStorage, LearnShop, DisableShop, AvoidCaves, AvoidMobs, Start, Pause, Resume, Stop, Close,
     StartShaft(ShaftDirection),
+    Expand(Module), Find, Shelter, Barricade, EmergencyExit,
+    HudVisible, HudPosition(HudPosition), HudCounters, HudTimer, HudDestination, HudBackground(i8), HudAmber,
+    Capture(Binding), SetBinding(Binding, Option<String>),
 }
 
 struct Block { id: String, label: String, ore: bool }
@@ -83,6 +135,9 @@ struct Menu {
     offset: usize,
     filter_dirty: bool,
     hits: Vec<(Rect, Click)>,
+    secondary_hits: Vec<(Rect, Module)>,
+    expanded: Option<Module>,
+    capturing: Option<Binding>,
     pending: Option<Click>,
     editor: Option<Editor>,
     notice: Option<String>,
@@ -154,11 +209,11 @@ impl Paint<'_,'_,'_> {
     fn button(&mut self, rect: Rect, title: &str, active: bool, enabled: bool, action: Click) {
         let hovered = enabled && inside(rect,self.mouse);
         self.fill(rect,match (active,hovered,enabled) {
-            (_,_,false) => 0xff2b2438,
-            (true,true,true) => 0xff8865df,
-            (true,false,true) => 0xff6744b5,
-            (false,true,true) => 0xff514168,
-            (false,false,true) => 0xff372e46,
+            (_,_,false) => 0xff222027,
+            (true,true,true) => 0xff794db3,
+            (true,false,true) => 0xff583583,
+            (false,true,true) => 0xff44394e,
+            (false,false,true) => 0xff2b2532,
         });
         let [x,y,w,h] = rect;
         self.text(title,[x+5.0,y+(h-8.0)*0.5],w-9.0,if enabled { TEXT } else { MUTED });
@@ -187,10 +242,10 @@ pub(in crate::game) fn register(mods: &mut Vec<NativeMod>) {
         id: ID.into(),
         title: "Dihrill".into(),
         description: "Choose targets and start Dihrill from your inventory.".into(),
-        keys: vec![
-            ["menu".into(), "Open Dihrill".into(), MENU_KEY.into()],
-            ["pause".into(), "Pause or resume Dihrill".into(), PAUSE_KEY.into()],
-        ],
+        keys: Binding::ALL.into_iter().map(|binding| {
+            let (name, label, default) = binding.entry();
+            [name.into(), label.into(), default.into()]
+        }).collect(),
     });
 }
 
@@ -201,9 +256,11 @@ fn open(game: &mut Game<'_>) {
     MENU.with(|menu| {
         let mut menu = menu.borrow_mut();
         menu.hits.clear();
+        menu.secondary_hits.clear();
         menu.offset = 0;
         menu.filter_dirty = true;
         menu.editor = None;
+        menu.capturing = None;
         menu.notice = None;
         menu.looked_at = looked_at;
         if menu.catalog.is_empty() {
@@ -231,15 +288,21 @@ pub(in crate::game) fn open_key(game: &mut Game<'_>, key: &str, pressed: bool) {
     if !pressed || game.screen != Screen::Playing || game.title.is_some() {
         return;
     }
-    if key == game.native_mod_key(ID, "menu", MENU_KEY) {
+    if key == UNBOUND { return; }
+    if key == Binding::Menu.key(game) {
         open(game);
-    } else if key == game.native_mod_key(ID, "pause", PAUSE_KEY) {
+    } else if key == Binding::Pause.key(game) {
         let run = miner::snapshot(game);
         if run.running {
             miner::pause_from_menu(game);
         } else if run.paused {
             miner::resume_from_menu(game);
         }
+    } else if key == Binding::Hud.key(game) {
+        miner::update_hud(game, |hud| hud.visible = !hud.visible);
+    } else if key == Binding::Stop.key(game) {
+        let run = miner::snapshot(game);
+        if run.running || run.paused { miner::stop_from_menu(game); }
     }
 }
 
@@ -389,9 +452,121 @@ fn avoidance(p: &mut Paint<'_,'_,'_>, s: &Settings, [x,y,w,_]: Rect) {
     ]);
     p.text("Avoid large underground openings and cave breakthroughs.",[x+2.0,y+31.0],w-4.0,TEXT);
     p.text("Detour around hostile mobs and resume automatically.",[x+2.0,y+45.0],w-4.0,TEXT);
-    p.text("Keep spare cobble in your hotbar for shelter.",[x+2.0,y+59.0],w-4.0,MUTED);
-    p.stepper([x,y+80.0,w,20.0],"Mob detection radius",&format!("{} blocks",s.mob_radius),Number::MobRadius,2);
-    p.button([x,y+106.0,w,17.0],"Back to Safety",false,true,Click::Page(Page::Safety));
+    p.stepper([x,y+59.0,w,20.0],"Mob detection radius",&format!("{} blocks",s.mob_radius),Number::MobRadius,2);
+    p.chips([x,y+85.0,w,18.0], [
+        ("Auto shelter",s.shelter_on_stop,true,Click::Shelter),
+        ("Retreat wall",s.retreat_barricade,true,Click::Barricade),
+        ("Emergency exit",s.emergency_exit,true,Click::EmergencyExit),
+    ]);
+    p.text("Shelter and retreat walls use ordinary hotbar cobble.",[x+2.0,y+112.0],w-4.0,MUTED);
+}
+
+fn module_action(module: Module, s: &Settings, run: &Snapshot) -> (bool, bool, Click) {
+    let idle = !run.running && !run.paused;
+    match module {
+        Module::Mining if !run.finding && run.running => (true, true, Click::Pause),
+        Module::Mining if !run.finding && run.paused => (true, true, Click::Resume),
+        Module::Mining => (false, idle && !s.targets.is_empty(), Click::Start),
+        Module::Finder if run.finding && run.running => (true, true, Click::Pause),
+        Module::Finder if run.finding && run.paused => (true, true, Click::Resume),
+        Module::Finder => (false, idle && !s.targets.is_empty(), Click::Find),
+        Module::Shaft => (run.shaft.is_some(), true, Click::Page(Page::Vertical)),
+        Module::Inventory => (!s.junk.is_empty() || s.storage.is_some(), true, Click::Page(Page::Inventory)),
+        Module::Caves => (s.avoid_caves, true, Click::AvoidCaves),
+        Module::Mobs => (s.avoid_mobs, true, Click::AvoidMobs),
+        Module::Shelter => (s.shelter_on_stop, true, Click::Shelter),
+        Module::Shop => (s.diamond_shop.is_some(), true, Click::Page(Page::Shop)),
+        Module::Hud => (s.hud.visible, true, Click::HudVisible),
+        Module::Bindings => (false, true, Click::Page(Page::Bindings)),
+        Module::Status => (run.running || run.paused, true, Click::Page(Page::Status)),
+    }
+}
+
+fn modules(p: &mut Paint<'_,'_,'_>, menu: &mut Menu, s: &Settings, run: &Snapshot, [x,y,w,h]: Rect) {
+    const COLUMNS: [(&str, &[Module]); 3] = [
+        ("Mining", &[Module::Mining, Module::Finder, Module::Shaft, Module::Inventory]),
+        ("Safety", &[Module::Caves, Module::Mobs, Module::Shelter, Module::Shop]),
+        ("Display", &[Module::Hud, Module::Bindings, Module::Status]),
+    ];
+    let gap = 5.0;
+    let column_width = (w - 2.0 * gap) / 3.0;
+    let mut hint = "Right-click a module to show its settings.";
+    for (column, (title, list)) in COLUMNS.into_iter().enumerate() {
+        let left = x + column as f32 * (column_width + gap);
+        p.fill([left,y,column_width,h-14.0],0xd9131119);
+        p.fill([left,y,column_width,19.0],0xff21192c);
+        p.text(title,[left+5.0,y+5.0],column_width-9.0,TEXT);
+        let mut row = y + 21.0;
+        for &module in list {
+            let (title, description) = module.label();
+            let rect = [left+2.0,row,column_width-4.0,17.0];
+            let (active, enabled, action) = module_action(module,s,run);
+            p.button(rect,title,active,enabled,action);
+            menu.secondary_hits.push((rect,module));
+            if inside(rect,p.mouse) { hint = description; }
+            row += 19.0;
+            if menu.expanded != Some(module) { continue; }
+            let details: &[(&str, Click, bool)] = match module {
+                Module::Mining => &[("Targets",Click::Page(Page::Targets),true),("Mining settings",Click::Page(Page::Mining),true)],
+                Module::Finder => &[("Targets",Click::Page(Page::Targets),true),("Search settings",Click::Page(Page::Mining),true)],
+                Module::Shaft => &[("Shaft settings",Click::Page(Page::Vertical),true)],
+                Module::Inventory => &[("Junk and storage",Click::Page(Page::Inventory),true)],
+                Module::Caves => &[("Safety settings",Click::Page(Page::Safety),true)],
+                Module::Mobs => &[("Detection radius",Click::Page(Page::Avoidance),true),("Retreat wall",Click::Barricade,s.retreat_barricade)],
+                Module::Shelter => &[("Safety options",Click::Page(Page::Avoidance),true)],
+                Module::Shop => &[("Shop settings",Click::Page(Page::Shop),true)],
+                Module::Hud => &[("HUD settings",Click::Page(Page::Hud),true),("Counters",Click::HudCounters,s.hud.counters)],
+                Module::Bindings => &[("Edit bindings",Click::Page(Page::Bindings),true)],
+                Module::Status => &[("Run details",Click::Page(Page::Status),true)],
+            };
+            for (label, action, active) in details {
+                p.button([left+8.0,row,column_width-10.0,14.0],label,*active,true,action.clone());
+                row += 16.0;
+            }
+        }
+    }
+    p.text(hint,[x+2.0,y+h-9.0],w-4.0,MUTED);
+}
+
+fn hud_page(p: &mut Paint<'_,'_,'_>, s: &Settings, [x,y,w,_]: Rect) {
+    let hud = s.hud;
+    p.chips([x,y,w,18.0], [
+        ("HUD",hud.visible,true,Click::HudVisible),
+        ("Counters",hud.counters,true,Click::HudCounters),
+        ("Timer",hud.timer,true,Click::HudTimer),
+        ("Destination",hud.destination,true,Click::HudDestination),
+    ]);
+    let position = |title, anchor| (title,hud.position==anchor,true,Click::HudPosition(anchor));
+    p.text("Position",[x+2.0,y+25.0],w-4.0,MUTED);
+    p.chips([x,y+38.0,w,18.0], [
+        position("Hotbar",HudPosition::AboveHotbar),
+        position("Top left",HudPosition::TopLeft),
+        position("Top right",HudPosition::TopRight),
+    ]);
+    p.text(&format!("Background {}%",hud.background),[x+2.0,y+72.0],w-50.0,TEXT);
+    p.button([x+w-45.0,y+65.0,20.0,18.0],"-",false,hud.background>0,Click::HudBackground(-10));
+    p.button([x+w-22.0,y+65.0,20.0,18.0],"+",false,hud.background<100,Click::HudBackground(10));
+    p.button([x,y+92.0,w,18.0],if hud.amber { "Text color  Amber" } else { "Text color  White" },
+        false,true,Click::HudAmber);
+}
+
+fn binding_label(key: &str) -> String {
+    if key == UNBOUND || key.is_empty() { return "Unbound".into(); }
+    key.strip_prefix("key.keyboard.").unwrap_or(key).replace('.', " ").to_uppercase()
+}
+
+fn bindings(p: &mut Paint<'_,'_,'_>, menu: &Menu, [x,y,w,_]: Rect) {
+    for (i,binding) in Binding::ALL.into_iter().enumerate() {
+        let (_,title,default) = binding.entry();
+        let row = y + 22.0*i as f32;
+        let key = binding.key(p.game);
+        let capturing = menu.capturing==Some(binding);
+        let label = if capturing { "Press a key...".into() } else { binding_label(&key) };
+        p.text(title,[x+2.0,row+5.0],w*0.48-3.0,TEXT);
+        p.button([x+w*0.49,row,w*0.51-53.0,18.0],&label,capturing,true,Click::Capture(binding));
+        p.button([x+w-49.0,row,49.0,18.0],"Reset",false,key!=default,Click::SetBinding(binding,None));
+    }
+    p.text("While binding, Backspace clears and Esc cancels.",[x+2.0,y+94.0],w-4.0,MUTED);
 }
 
 fn inventory(p: &mut Paint<'_,'_,'_>, menu: &Menu, s: &Settings, [x,y,w,_]: Rect) {
@@ -505,6 +680,7 @@ pub(in crate::game) fn render(game: &Game<'_>, batch: &mut HudBatch, screen: &Na
         let [vw,vh] = [batch.width,batch.height];
         let mut p = Paint { game, batch, mouse:screen.mouse, hits:std::mem::take(&mut menu.hits) };
         p.hits.clear();
+        menu.secondary_hits.clear();
         if !owned {
             let [left,top,_,_] = screen.rect;
             let (x,y) = if left >= 91.0 && top > 15.0 { (left-87.0,top) } else { (6.0,6.0) };
@@ -514,26 +690,38 @@ pub(in crate::game) fn render(game: &Game<'_>, batch: &mut HudBatch, screen: &Na
         }
         let settings = miner::settings();
         let run = miner::snapshot(game);
-        let w = (vw-12.0).clamp(246.0,388.0);
+        let max_width = if menu.page == Page::Modules { 500.0 } else { 388.0 };
+        let w = (vw-12.0).clamp(246.0,max_width);
         let min_height = if menu.page == Page::Mining { 242.0 } else { 232.0 };
         let h = (vh-8.0).clamp(min_height,280.0);
         let x = (vw-w)*0.5;
         let y = (vh-h)*0.5;
         let end = y+h;
         p.fill([x-2.0,y-2.0,w+4.0,h+4.0],0x8308050c);
-        p.fill([x,y,w,h],0xff1c1527);
-        p.fill([x,y,w,2.0],0xffa780ed);
-        p.text("DIHRILL",[x+9.0,y+10.0],w-131.0,AMBER);
+        p.fill([x,y,w,h],0xee15121b);
+        p.fill([x,y,w,2.0],0xff8950c7);
+        if menu.page == Page::Modules {
+            p.text("DIHRILL",[x+9.0,y+10.0],w-131.0,AMBER);
+        } else {
+            p.button([x+9.0,y+6.0,64.0,15.0],"Modules",false,true,Click::Page(Page::Modules));
+        }
         p.text(run.state,[x+w-118.0,y+10.0],90.0,MUTED);
         p.button([x+w-23.0,y+5.0,17.0,16.0],"x",false,true,Click::Close);
-        let area = [x+9.0,y+47.0,w-18.0,h-89.0];
+        let area = if menu.page == Page::Modules {
+            [x+9.0,y+27.0,w-18.0,h-69.0]
+        } else {
+            [x+9.0,y+47.0,w-18.0,h-89.0]
+        };
         if let Some(edit) = &menu.editor {
             editor(&mut p,edit,area);
         } else {
-            p.chips([x+9.0,y+26.0,w-18.0,16.0],PAGES.map(|(page,title)| {
-                (title,menu.page==page,true,Click::Page(page))
-            }));
+            if menu.page != Page::Modules {
+                p.chips([x+9.0,y+26.0,w-18.0,16.0],PAGES.map(|(page,title)| {
+                    (title,menu.page==page,true,Click::Page(page))
+                }));
+            }
             match menu.page {
+                Page::Modules => modules(&mut p,&mut menu,&settings,&run,area),
                 Page::Targets => targets(&mut p,&mut menu,&settings,area),
                 Page::Mining => mining(&mut p,&settings,area),
                 Page::Safety => safety(&mut p,&settings,area),
@@ -542,6 +730,8 @@ pub(in crate::game) fn render(game: &Game<'_>, batch: &mut HudBatch, screen: &Na
                 Page::Shop => shop(&mut p,&settings,area),
                 Page::Avoidance => avoidance(&mut p,&settings,area),
                 Page::Vertical => vertical(&mut p,&settings,&run,area),
+                Page::Hud => hud_page(&mut p,&settings,area),
+                Page::Bindings => bindings(&mut p,&menu,area),
             }
             p.chips([x+9.0,end-38.0,w-18.0,19.0], [
                 ("Start",!run.running&&!run.paused,menu.page!=Page::Vertical&&!settings.targets.is_empty()&&!run.running&&!run.paused,Click::Start),
@@ -558,15 +748,23 @@ pub(in crate::game) fn render(game: &Game<'_>, batch: &mut HudBatch, screen: &Na
 
 pub(in crate::game) fn render_hud(game: &Game<'_>, batch: &mut HudBatch) {
     if game.screen != Screen::Playing || game.player.is_none() { return; }
+    let config = miner::hud_settings();
+    if !config.visible { return; }
     HUD.with(|hud| {
         let mut hud = hud.borrow_mut();
         let now = Instant::now();
         if hud.refresh.is_none_or(|time| now>=time) {
             let run = miner::snapshot(game);
             hud.text = if run.running || run.paused {
-                let mut text = format!("Dihrill  {}  /  {} mined", run.state, run.mined);
-                if let Some(seconds) = run.remaining {
+                let mut text = format!("Dihrill  {}", run.state);
+                if config.counters && !run.finding {
+                    text.push_str(&format!("  /  {} mined", run.mined));
+                }
+                if config.timer && let Some(seconds) = run.remaining {
                     text.push_str(&format!("  /  {} left", duration_label(seconds)));
+                }
+                if config.destination && let Some(pos) = run.destination {
+                    text.push_str(&format!("  /  {}", coords(pos)));
                 }
                 text
             } else {
@@ -575,21 +773,35 @@ pub(in crate::game) fn render_hud(game: &Game<'_>, batch: &mut HudBatch) {
             hud.refresh = Some(now+Duration::from_millis(220));
         }
         if !hud.text.is_empty() {
-            let width = game.native_text_width(&hud.text)+12.0;
-            let x = (batch.width-width)*0.5;
-            let y = (batch.height-43.0).max(0.0);
-            game.native_fill(batch,[x,y,width,14.0],0xbc1c1527);
-            game.native_text(batch,&hud.text,[x+6.0,y+3.0],AMBER,true);
+            let width = (game.native_text_width(&hud.text)+12.0).min(batch.width-10.0);
+            let (x,y) = match config.position {
+                HudPosition::AboveHotbar => ((batch.width-width)*0.5,(batch.height-43.0).max(0.0)),
+                HudPosition::TopLeft => (5.0,5.0),
+                HudPosition::TopRight => (batch.width-width-5.0,5.0),
+            };
+            let alpha = u32::from(config.background)*255/100;
+            game.native_fill(batch,[x,y,width,14.0],(alpha<<24)|0x17131d);
+            let mut p = Paint { game, batch, mouse:[0.0; 2], hits:Vec::new() };
+            p.text(&hud.text,[x+6.0,y+3.0],width-12.0,if config.amber { AMBER } else { TEXT });
         }
     });
 }
 
 pub(in crate::game) fn click(game: &Game<'_>, point: [f32; 2], button: i32, canceled: &mut bool) {
-    if *canceled || button != 0 { return; }
+    if *canceled || !matches!(button, 0 | 1) { return; }
     let owned = game.native_mod_screen() == Some(ID);
     if !owned && !personal(game) { return; }
     MENU.with(|menu| {
         let mut menu = menu.borrow_mut();
+        if button == 1 {
+            if owned && let Some(module) = menu.secondary_hits.iter()
+                .find_map(|(rect,module)| inside(*rect,point).then_some(*module))
+            {
+                menu.pending = Some(Click::Expand(module));
+                *canceled = true;
+            }
+            return;
+        }
         let action = menu.hits.iter().find_map(|(rect,action)| {
             (inside(*rect,point) && (owned != matches!(action,Click::Inventory))).then(|| action.clone())
         });
@@ -759,7 +971,26 @@ fn add_query(game: &mut Game<'_>, query: &str) -> Result<(), String> {
 fn apply_action(game: &mut Game<'_>, menu: &mut Menu, action: Click) {
     menu.notice = None;
     match action {
-        Click::Page(page) => menu.page = page,
+        Click::Page(page) => {
+            menu.capturing = None;
+            menu.expanded = None;
+            menu.page = page;
+        }
+        Click::Expand(module) => {
+            menu.expanded = (menu.expanded!=Some(module)).then_some(module);
+        }
+        Click::Capture(binding) => menu.capturing = Some(binding),
+        Click::SetBinding(binding, key) => {
+            let (id, _, default) = binding.entry();
+            let chosen = key.as_deref().unwrap_or(default);
+            if chosen != UNBOUND && Binding::ALL.into_iter().any(|other| other!=binding && other.key(game)==chosen) {
+                menu.notice = Some("That key is already used by Dihrill.".into());
+                return;
+            }
+            game.native_set_mod_key(ID,id,key.as_deref());
+            menu.capturing = None;
+            menu.notice = Some(format!("Binding set to {}.",binding_label(chosen)));
+        }
         Click::Filter(filter) => {
             menu.filter = filter;
             menu.filter_dirty = true;
@@ -847,9 +1078,20 @@ fn apply_action(game: &mut Game<'_>, menu: &mut Menu, action: Click) {
         Click::ClearStorage => miner::update_settings(game, |settings| settings.storage = None),
         Click::AvoidCaves => miner::update_settings(game, |settings| settings.avoid_caves = !settings.avoid_caves),
         Click::AvoidMobs => miner::update_settings(game, |settings| settings.avoid_mobs = !settings.avoid_mobs),
+        Click::Shelter => miner::update_settings(game, |s| s.shelter_on_stop = !s.shelter_on_stop),
+        Click::Barricade => miner::update_settings(game, |s| s.retreat_barricade = !s.retreat_barricade),
+        Click::EmergencyExit => miner::update_settings(game, |s| s.emergency_exit = !s.emergency_exit),
+        Click::HudVisible => miner::update_hud(game, |hud| hud.visible = !hud.visible),
+        Click::HudPosition(position) => miner::update_hud(game, |hud| hud.position = position),
+        Click::HudCounters => miner::update_hud(game, |hud| hud.counters = !hud.counters),
+        Click::HudTimer => miner::update_hud(game, |hud| hud.timer = !hud.timer),
+        Click::HudDestination => miner::update_hud(game, |hud| hud.destination = !hud.destination),
+        Click::HudBackground(delta) => miner::update_hud(game, |hud| hud.background = hud.background.saturating_add_signed(delta)),
+        Click::HudAmber => miner::update_hud(game, |hud| hud.amber = !hud.amber),
         Click::LearnShop => menu.notice = Some(super::dihrill_shop::start_setup(game)),
         Click::DisableShop => miner::update_settings(game, |settings| settings.diamond_shop = None),
         Click::Start => menu.notice = Some(miner::run_from_menu(game)),
+        Click::Find => menu.notice = Some(miner::find_from_menu(game)),
         Click::StartShaft(direction) => menu.notice = Some(miner::run_shaft_from_menu(game, direction)),
         Click::Pause => menu.notice = Some(miner::pause_from_menu(game)),
         Click::Resume => menu.notice = Some(miner::resume_from_menu(game)),
@@ -920,6 +1162,19 @@ pub(in crate::game) fn key(game: &Game<'_>, key: &str, repeat: bool, canceled: &
     if *canceled || game.native_mod_screen()!=Some(ID) { return; }
     MENU.with(|menu| {
         let mut menu = menu.borrow_mut();
+        if let Some(binding) = menu.capturing {
+            *canceled = true;
+            if repeat { return; }
+            match key {
+                "key.keyboard.escape" => menu.capturing = None,
+                "key.keyboard.backspace" => menu.pending = Some(Click::SetBinding(binding,Some(UNBOUND.into()))),
+                key if key.starts_with("key.keyboard.") && key != UNBOUND => {
+                    menu.pending = Some(Click::SetBinding(binding,Some(key.into())));
+                }
+                _ => (),
+            }
+            return;
+        }
         match key {
             "key.keyboard.backspace" => {
                 if let Some(edit) = &mut menu.editor {

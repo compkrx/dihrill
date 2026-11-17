@@ -37,3 +37,9 @@ The v0.9.2 loopback baseline left its player connected after pausing, allowing a
 The single-player pursuit fixture held off an AI-enabled cave spider with a confirmed two-block barricade, then mined the alternate tunnel without a manual resume. The player finished at full health with the totem still equipped.
 
 The single-player timer fixture verified two-block-high walls, a roof, and clear player space. The loopback timer fixture verified the same enclosure through server-side block checks with an existing roof. The planner suite passed 19 checks, and the native package passed the Horizon validator.
+
+## Version 0.9.4
+
+The utility fixture kept an unlimited run active while bedrock blocked the only route to ore. It verified that the corridor stayed open, then removed the obstruction and observed the same run mine the ore. The finder fixture took the player to a selected ore without a tool or a block break. The client checks also verified right-click expansion, persisted HUD settings, and reassigned menu and HUD keys.
+
+The planner suite passed 19 checks. The cave fixture preserved the barrier into the cave until avoidance was explicitly disabled. The loopback fixture verified retreat, diamond sales, resumed mining and confirmed shelter blocks after the timer.

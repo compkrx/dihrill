@@ -224,6 +224,7 @@ pub(super) enum SearchResult {
 
 pub(super) struct SearchOptions {
     pub tunnel: bool,
+    pub find_only: bool,
     pub max_fall: u8,
     pub vein: Option<HashSet<Pos>>,
     pub blocked_edges: HashSet<(Pos, Pos)>,
@@ -240,6 +241,7 @@ impl Default for SearchOptions {
     fn default() -> Self {
         Self {
             tunnel: true,
+            find_only: false,
             max_fall: 1,
             vein: None,
             blocked_edges: HashSet::new(),
@@ -450,11 +452,12 @@ fn consider_targets(
                 && !options.area.is_some_and(|area| !inside(p, area))
                 && !options.vein.as_ref().is_some_and(|vein| !vein.contains(&p))
                 && !options.blocked_approaches.contains(&(stand, p))
-                && can_break(get, p)
+                && (options.find_only && !c.hazard || can_break(get, p))
             {
                 let priority_penalty = i64::from(8 - c.priority.min(8)) * 12;
                 let angle_penalty = if (0..=1).contains(&dy) { 0 } else { 12 };
-                offer(best, i64::from(cost) + i64::from(c.dig_cost.unwrap_or_default()) + priority_penalty + angle_penalty, p, stand);
+                let dig_cost = if options.find_only { 0 } else { c.dig_cost.unwrap_or_default() };
+                offer(best, i64::from(cost) + i64::from(dig_cost) + priority_penalty + angle_penalty, p, stand);
             }
         }
     }

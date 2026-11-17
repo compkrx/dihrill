@@ -5,15 +5,14 @@ import tempfile
 import time
 
 from extended_smoke import has_block, seed_config, status
-from smoke import CLIENT_FLAGS, INSTALLED, free_port, game_process, ready
+from smoke import CLIENT_FLAGS, INSTALLED, free_port, game_process, module_settings, ready, ui_click
 
 
 def start_shaft(game, direction, length):
     game.run("key key.keyboard.f8 tap")
     game.wait_for("Dihrill menu opens", lambda: game.run("screen")["screen"] == "mod")
-    for x, y in ((480, 193), (478, 364), (478, 268)):
-        game.run(f"click-at {x} {y}")
-        time.sleep(0.25)
+    module_settings(game, "vertical")
+    ui_click(game, 478, 268)
     game.run(f"type {length}")
     game.run("key key.keyboard.enter tap")
     time.sleep(0.25)

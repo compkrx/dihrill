@@ -7,7 +7,7 @@ import tempfile
 import time
 
 from extended_smoke import command, config_file, has_block, local_command, seed_config, status
-from smoke import CLIENT_FLAGS, INSTALLED, free_port, game_process, ready
+from smoke import CLIENT_FLAGS, INSTALLED, free_port, game_process, module_settings, ready, ui_click
 
 
 def setup(game, commands):
@@ -44,9 +44,8 @@ def cave(client, home):
         game.run("options-set guiScale 1")
         command(game, "#dihrill settings")
         game.wait_for("menu opens", lambda: game.run("screen")["screen"] == "mod")
-        for x, y in ((475, 192), (395, 345), (395, 218)):
-            game.run(f"click-at {x} {y}")
-            time.sleep(0.25)
+        module_settings(game, "avoidance")
+        ui_click(game, 395, 218)
         cfg = json.loads(config_file(home).read_text(encoding="utf8"))
         assert cfg["avoid_caves"] is False and cfg["avoid_mobs"] is True, cfg
         game.run("key key.keyboard.escape tap")
@@ -76,8 +75,8 @@ def shaft(client, home):
             game.wait_for("exit the narrow shaft and collect the diamond", lambda:
                           game.run("inventory")["counts"].get("minecraft:diamond") == 1,
                           timeout=45)
-            game.wait_for("real cave ends the mining run",
-                          lambda: "Stopped" in status(game), timeout=45)
+            game.wait_for("real cave puts the route search on hold",
+                          lambda: "Waiting to rescan" in status(game), timeout=45)
         except RuntimeError as error:
             raise RuntimeError(f"{error}. Dihrill status: {status(game)}") from error
         assert has_block(game, (12, 151, 0), "deepslate")
@@ -222,8 +221,7 @@ def remote_shelter(game, console, name):
     game.run("options-set guiScale 1")
     game.run("key key.keyboard.f8 tap")
     game.wait_for("timer menu opens", lambda: game.run("screen")["screen"] == "mod", timeout=10)
-    game.run("click-at 405 192")
-    time.sleep(0.25)
+    module_settings(game, "mining")
     game.run("click-at 575 251")
     time.sleep(0.25)
     game.run("type 2s")
